@@ -33,6 +33,10 @@ Desktop is clean: no login/account/license-key code. The only `crosspaste.com` e
 
 Condition 1 fails outright (no Android source exists publicly). **GREENFIELD.**
 
+## Reference clone
+
+The clone lives at `~/Arik/dev/_reference/crosspaste-desktop` (outside this repo). Policy: **read-for-design only, no code copying.** Exception: hard-to-reimplement pieces (e.g. the pairing v3 key schedule) may be lifted deliberately, with a provenance header on any lifted file (source repo, path, commit, AGPL-3.0 notice).
+
 ## Salvage value (reference only, not a fork)
 
 The public repo is AGPL-3.0 and contains mature prior art worth reading while building greenfield: `core/.../pairing/v3/` (key schedules, signing-key SHA-256 fingerprints, pairing session store + identity-conflict tests), `app/.../sync/` (SyncResolver, GeneralSyncManager, push/pull services), and WebSocket routing modules with real integration tests. Consult as design reference; do not copy code unless we deliberately accept AGPL provenance tracking for those files (we're AGPL-3.0 anyway, but attribution hygiene applies).
