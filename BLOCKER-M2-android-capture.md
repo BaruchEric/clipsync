@@ -1,7 +1,18 @@
 # BLOCKER — M2 Android background clipboard capture
 
 **Date:** 2026-08-08 · **Status:** locked design proven impossible as specified → stop-and-report per working agreement.
-**Tested on:** Android 15 (API 35) Google-APIs emulator (`clipsync-test`, arm64). Real-hardware confirmation still owed by Eric.
+**Tested on:** Android 15 (API 35) AND Android 16 (API 36.1, the project's `targetSdk`) Google-APIs emulators, arm64. **Identical denial on both.** Real-hardware confirmation still owed by Eric.
+
+## Android 16 confirmation (2026-08-08)
+
+Re-ran the decisive test on a fresh Android 16 emulator (`release=16, sdk=36`). Same result across all paths — foreground-service poll `null`, a11y event-path read `null`, and the same AOSP line:
+
+```
+E ClipboardService: Denying clipboard access to ca.beric.clipsync,
+  application is not in focus nor is it a system service for user 0
+```
+
+The restriction is not version-specific to Android 15; it is the standing AOSP model on the current target.
 
 ## The locked premise that failed
 
