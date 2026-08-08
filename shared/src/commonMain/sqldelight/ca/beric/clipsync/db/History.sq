@@ -1,0 +1,20 @@
+CREATE TABLE history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'text',
+    content TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+
+insert:
+INSERT INTO history(device_id, kind, content, created_at_ms)
+VALUES (?, ?, ?, ?);
+
+selectAll:
+SELECT * FROM history ORDER BY id DESC;
+
+latest:
+SELECT * FROM history ORDER BY id DESC LIMIT 1;
+
+trimToCap:
+DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT ?);
