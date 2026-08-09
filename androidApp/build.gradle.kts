@@ -21,6 +21,21 @@ android {
         release { isMinifyEnabled = false }
     }
     buildFeatures { compose = true }
+
+    // Netty (embedded TLS server) ships duplicate META-INF resources across its jars.
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/INDEX.LIST",
+                "META-INF/io.netty.versions.properties",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/*.md",
+                "META-INF/*.kotlin_module",
+            )
+        }
+    }
 }
 
 dependencies {

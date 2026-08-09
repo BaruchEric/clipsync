@@ -22,10 +22,25 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }
+        // Intermediate source set shared by the two JVM targets (Android + desktop):
+        // hosts the Ktor/TLS transport and cert generation written once for both.
+        val jvmShared by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                implementation(libs.ktor.server.netty)
+                implementation(libs.ktor.server.websockets)
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.ktor.client.websockets)
+                implementation(libs.ktor.network.tls)
+                implementation(libs.bouncycastle.bcpkix)
+            }
+        }
+        androidMain.get().dependsOn(jvmShared)
         androidMain.dependencies {
             implementation(libs.sqldelight.driver.android)
         }
         val desktopMain by getting {
+            dependsOn(jvmShared)
             dependencies {
                 implementation(libs.jna)
                 implementation(libs.sqldelight.driver.sqlite)
