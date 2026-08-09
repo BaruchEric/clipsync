@@ -55,6 +55,9 @@ object AppGraph {
     @Volatile
     private var pairingManager: PairingManager? = null
 
+    @Volatile
+    private var connectionManager: ConnectionManager? = null
+
     /** This device's pairing payload (X25519 pubkey etc.), ready once [startSync] completes. */
     @Volatile
     var myPayload: String? = null
@@ -89,19 +92,23 @@ object AppGraph {
                 TlsIdentityStore(File(appContext.filesDir, "tls.p12"), secretStore).loadOrCreate("clipsync-android")
             }.onFailure { Log.w(TAG, "TLS identity unavailable: ${it.message}") }.getOrNull()
             val engine = SyncEngine(identity.deviceId, repo, AndroidClipboardApplier(clipboard))
+            val pairing = PairingManager(identity, peerStore)
+            pairingManager = pairing
             val manager = ConnectionManager(
                 localDeviceId = identity.deviceId,
                 tlsIdentity = tls, // now serves too (symmetric P2P) when a cert is available
                 engine = engine,
                 perPairKeyFor = { peerStore.get(it)?.perPairKey },
                 scope = scope,
+                // myPayload is set just below (after serving is known); the lambda reads it lazily.
+                myPayload = { myPayload },
+                pairingSink = { json -> pairing.pair(json, System.currentTimeMillis())?.deviceId },
             )
+            connectionManager = manager
             // Netty-on-Android is the least-proven thing here: a server failure must not
             // kill the process — the dial path still works.
             val serving = tls != null && runCatching { manager.startServer(SYNC_PORT) }
                 .onFailure { Log.w(TAG, "server start failed: ${it.message}") }.isSuccess
-            val pairing = PairingManager(identity, peerStore)
-            pairingManager = pairing
             myPayload = pairing.myPayload(
                 certFingerprint = tls?.fingerprint ?: CLIENT_NO_CERT,
                 addresses = if (serving) localAddresses() else emptyList(),
@@ -159,6 +166,16 @@ object AppGraph {
         }
         Log.i(TAG, "paired ${peer.deviceId} name=${peer.deviceName} endpoints=${peer.addresses}")
         return true
+    }
+
+    /**
+     * Pair from a scanned QR payload, then arm reciprocal pairing so the next outbound link
+     * sends our payload back — the scanned (camera-less) peer needs it to derive the same key.
+     */
+    suspend fun pairFromScan(payloadText: String): Boolean {
+        val ok = pair(payloadText)
+        if (ok) connectionManager?.offerReciprocalPairing()
+        return ok
     }
 
     private fun startCapture(engine: SyncEngine, clipboard: ShizukuClipboard) {

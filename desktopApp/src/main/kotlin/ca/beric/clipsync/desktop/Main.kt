@@ -1,10 +1,22 @@
 package ca.beric.clipsync.desktop
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -36,6 +48,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -66,12 +79,14 @@ fun main() {
     val db = ClipsyncDb(DriverFactory().createDriver())
     val repo = ClipRepository(db)
     val peerStore = PeerStore(db)
-    val (engine, identityName, connectedPeers) = runBlocking {
+    val boot = runBlocking {
         ClipsyncCrypto.ensureInitialized()
         val secretStore = SecretStore()
         val identity = DeviceIdentity(db, secretStore).getOrCreate("Mac")
         val appSupportDir = File(System.getProperty("user.home"), "Library/Application Support/clipsync")
         val tls = TlsIdentityStore(File(appSupportDir, "tls.p12"), secretStore).loadOrCreate("clipsync-mac")
+        val pairing = PairingManager(identity, peerStore)
+        val myPayload = pairing.myPayload(tls.fingerprint, localAddresses(), SYNC_PORT)
         val engine = SyncEngine(identity.deviceId, repo, DesktopClipboardApplier())
         val manager = ConnectionManager(
             localDeviceId = identity.deviceId,
@@ -79,6 +94,9 @@ fun main() {
             engine = engine,
             perPairKeyFor = { peerStore.get(it)?.perPairKey },
             scope = appScope,
+            myPayload = { myPayload },
+            // A phone that scanned this QR sends its payload back; pair it over the wire.
+            pairingSink = { json -> pairing.pair(json, System.currentTimeMillis())?.deviceId },
         )
         manager.startServer(SYNC_PORT, host = "0.0.0.0")
         // Symmetric P2P: also dial known peers (whichever side connects first wins; the
@@ -93,11 +111,11 @@ fun main() {
                 }
             }
         }.onFailure { println("clipsync: mDNS unavailable: ${it.message}") }
-        val pairing = PairingManager(identity, peerStore)
-        writePairingFiles(pairing, tls.fingerprint, SYNC_PORT)
+        // File-based pairing bootstrap kept for headless testing (QR is the primary path).
+        File(File(System.getProperty("user.home"), ".clipsync").apply { mkdirs() }, "my-payload.txt").writeText(myPayload)
         watchPeerPayload(appScope, pairing)
         println("clipsync: identity ${identity.deviceId}, TLS fp ${tls.fingerprint}, server :$SYNC_PORT")
-        Triple(engine, identity.deviceName, manager.connectedPeers)
+        Boot(engine, identity.deviceName, manager.connectedPeers, myPayload)
     }
 
     // Capture: record locally for history and hand to the engine to broadcast.
@@ -105,22 +123,22 @@ fun main() {
         ClipboardWatcher(MacPasteboard()).changes().collect { text ->
             val now = System.currentTimeMillis()
             repo.record(LOCAL_DEVICE_ID, text, now)
-            engine.onLocalCapture(text, now)
+            boot.engine.onLocalCapture(text, now)
         }
     }
 
     application {
         var windowVisible by remember { mutableStateOf(true) }
         val icon = remember { trayIcon() }
-        val connected by connectedPeers.collectAsState()
+        val connected by boot.connectedPeers.collectAsState()
         val status = if (connected.isEmpty()) "no peers connected" else "${connected.size} peer(s) connected"
 
         Tray(
             icon = icon,
-            tooltip = "clipsync ($identityName) — $status",
+            tooltip = "clipsync (${boot.deviceName}) — $status",
             onAction = { windowVisible = true },
             menu = {
-                Item("Open history") { windowVisible = true }
+                Item("Open history & pairing") { windowVisible = true }
                 Separator()
                 Item("Quit clipsync") { exitApplication() }
             },
@@ -130,21 +148,55 @@ fun main() {
             Window(
                 onCloseRequest = { windowVisible = false },
                 title = "clipsync — $status",
-                state = rememberWindowState(width = 380.dp, height = 520.dp),
+                state = rememberWindowState(width = 420.dp, height = 680.dp),
             ) {
-                HistoryScreen(repo)
+                DesktopScreen(repo, boot.myPayload, peerStore, connected)
             }
         }
     }
 }
 
-/** Writes this device's pairing payload for out-of-band exchange during the sim. */
-private fun writePairingFiles(pairing: PairingManager, fingerprint: String, port: Int) {
-    val dir = File(System.getProperty("user.home"), ".clipsync").apply { mkdirs() }
-    val payload = pairing.myPayload(fingerprint, localAddresses(), port)
-    File(dir, "my-payload.txt").writeText(payload)
-    println("clipsync: wrote pairing payload to ${File(dir, "my-payload.txt").absolutePath}")
-    println("clipsync payload: $payload")
+private class Boot(
+    val engine: SyncEngine,
+    val deviceName: String,
+    val connectedPeers: StateFlow<Set<String>>,
+    val myPayload: String,
+)
+
+/** Window content: pairing QR + short-auth-string list, above the clipboard history. */
+@Composable
+private fun DesktopScreen(
+    repo: ClipRepository,
+    myPayload: String,
+    peerStore: PeerStore,
+    connected: Set<String>,
+) {
+    MaterialTheme {
+        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Scan to pair a phone", style = MaterialTheme.typography.titleSmall)
+            Image(
+                bitmap = remember(myPayload) { qrImageBitmap(myPayload) },
+                contentDescription = "pairing QR code",
+                modifier = Modifier.size(180.dp),
+            )
+            // Recompute the paired list whenever the connected set changes (e.g. a new pairing).
+            val peers = remember(connected) { peerStore.all() }
+            if (peers.isNotEmpty()) {
+                Text(
+                    "Paired devices — these codes must match on both screens. If they don't, remove the peer.",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                peers.forEach { p ->
+                    Text(
+                        "${p.deviceName}: ${ClipsyncCrypto.shortAuthString(p.perPairKey)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+            HorizontalDivider()
+            Box(Modifier.weight(1f)) { HistoryScreen(repo) }
+        }
+    }
 }
 
 /** Polls ~/.clipsync/peer-payload.txt and pairs whenever its contents change. */

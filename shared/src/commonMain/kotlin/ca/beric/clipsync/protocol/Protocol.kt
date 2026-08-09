@@ -39,6 +39,17 @@ sealed interface ControlMessage {
         @SerialName("v") val protocolVersion: Int = 1,
     ) : ControlMessage
 
+    /**
+     * Reciprocal pairing: the sender's [ca.beric.clipsync.pairing.PairingPayload] JSON,
+     * sent by a device that just scanned the peer's QR so the peer (which has no camera)
+     * can derive the same per-pair key. Only sent while a reciprocal pairing is pending.
+     */
+    @Serializable
+    @SerialName("pair")
+    data class PairRequest(
+        @SerialName("p") val payload: String,
+    ) : ControlMessage
+
     /** Text or small image: the sealed payload rides inline (base64). */
     @Serializable
     @SerialName("clip")

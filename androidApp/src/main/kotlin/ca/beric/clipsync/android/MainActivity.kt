@@ -39,6 +39,9 @@ import androidx.compose.ui.unit.dp
 import ca.beric.clipsync.R
 import ca.beric.clipsync.android.capture.SyncForegroundService
 import ca.beric.clipsync.core.ClipEntry
+import ca.beric.clipsync.crypto.ClipsyncCrypto
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
@@ -48,6 +51,26 @@ class MainActivity : ComponentActivity() {
 
     private val shizukuPermissionListener =
         Shizuku.OnRequestPermissionResultListener { _, _ -> refreshTick.intValue += 1 }
+
+    // ZXing scanner: reads a peer's QR (its pairing payload) and pairs from it.
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val payload = result.contents ?: return@registerForActivityResult
+        AppGraph.scope.launch {
+            val ok = AppGraph.pairFromScan(payload)
+            Log.i("clipsyncScan", "scan-pair ok=$ok")
+            refreshTick.intValue += 1
+        }
+    }
+
+    private fun launchScan() {
+        scanLauncher.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("Scan the QR shown in clipsync on your other device")
+                .setBeepEnabled(false)
+                .setOrientationLocked(false),
+        )
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -130,6 +153,24 @@ class MainActivity : ComponentActivity() {
                     if (connected.isEmpty()) "No peers connected" else "${connected.size} peer(s) connected",
                     style = MaterialTheme.typography.labelMedium,
                 )
+
+                Button(onClick = { launchScan() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Scan a device's QR to pair")
+                }
+
+                val peers = remember(connected, tick) { AppGraph.peerStore.all() }
+                if (peers.isNotEmpty()) {
+                    Text(
+                        "Paired — these codes must match on both screens. If they don't, remove the peer.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    peers.forEach { p ->
+                        Text(
+                            "${p.deviceName}: ${ClipsyncCrypto.shortAuthString(p.perPairKey)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
 
                 key(tick) {
                     when {

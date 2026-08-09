@@ -77,7 +77,8 @@ class SyncEngine(
     suspend fun onRemoteMessage(fromDeviceId: String, message: ControlMessage) {
         when (message) {
             is ControlMessage.ClipUpdate -> applyRemoteClip(fromDeviceId, message)
-            is ControlMessage.Hello, is ControlMessage.ImageUpdate -> Unit // image path handled elsewhere
+            // Hello/PairRequest are handled by the transport; ImageUpdate on the image path.
+            is ControlMessage.Hello, is ControlMessage.PairRequest, is ControlMessage.ImageUpdate -> Unit
         }
     }
 

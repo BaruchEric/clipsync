@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Manages TLS connections to paired peers and wires each one into the [engine].
@@ -27,7 +28,16 @@ class ConnectionManager(
     private val engine: SyncEngine,
     private val perPairKeyFor: (peerDeviceId: String) -> ByteArray?,
     private val scope: CoroutineScope,
+    /** This device's pairing payload JSON, offered to a peer during reciprocal pairing. */
+    private val myPayload: () -> String? = { null },
+    /** Persists a peer from a received payload and returns its device id (or null to reject). */
+    private val pairingSink: ((payloadJson: String) -> String?)? = null,
 ) {
+    /** Set after a QR scan so the next outbound link offers our payload back to the scanned peer. */
+    private val pendingReciprocalPair = AtomicBoolean(false)
+
+    /** Call after scanning a peer's QR: the next link to any peer sends our payload once. */
+    fun offerReciprocalPairing() = pendingReciprocalPair.set(true)
     private val server = tlsIdentity?.let { id -> ClipServer(id) { link -> handleLink(link) } }
 
     /** Device ids with an in-flight or open outbound (dialed) link, to avoid re-dialing. */
@@ -79,25 +89,29 @@ class ConnectionManager(
         }
     }
 
-    /** Returns true if a peer was registered on this link (a valid Hello was accepted). */
+    /** Returns true if a peer was registered on this link (a valid Hello / pairing was accepted). */
     private suspend fun handleLink(link: PeerLink): Boolean {
         link.send(ControlMessage.Hello(localDeviceId))
+        if (pendingReciprocalPair.get()) myPayload()?.let { link.send(ControlMessage.PairRequest(it)) }
         var peerId: String? = null
+
+        // Registers the peer once its per-pair key is known. Either a Hello (peer already
+        // paired) or a PairRequest (peer just paired us over the wire) can trigger it.
+        suspend fun register(id: String) {
+            if (peerId != null) return
+            val key = perPairKeyFor(id) ?: return // unknown peer: wait (a PairRequest may follow)
+            if (!connected.add(id)) { link.close(); return } // already linked: drop the duplicate
+            peerId = id
+            engine.addPeer(RemotePeer(id, key) { link.send(it) })
+            _connectedPeers.value = connected.toSet()
+            pendingReciprocalPair.set(false)
+        }
+
         try {
             link.control.collect { message ->
                 when (message) {
-                    is ControlMessage.Hello -> {
-                        val key = perPairKeyFor(message.deviceId)
-                        when {
-                            key == null -> link.close() // not paired (yet): let the peer retry
-                            !connected.add(message.deviceId) -> link.close() // already linked: drop the dupe
-                            else -> {
-                                peerId = message.deviceId
-                                engine.addPeer(RemotePeer(message.deviceId, key) { link.send(it) })
-                                _connectedPeers.value = connected.toSet()
-                            }
-                        }
-                    }
+                    is ControlMessage.Hello -> register(message.deviceId)
+                    is ControlMessage.PairRequest -> pairingSink?.invoke(message.payload)?.let { register(it) }
                     else -> peerId?.let { engine.onRemoteMessage(it, message) }
                 }
             }
