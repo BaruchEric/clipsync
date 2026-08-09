@@ -53,8 +53,8 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 - **README + AGPL LICENSE + F-Droid fastlane metadata** ✅.
 
 ### Genuinely remaining (needs Eric / a device)
-- **QR pairing UI** — the only thing gating a `m3` tag. Pairing key exchange is done + tested; the camera scan (Android) + QR render (desktop) + SAS-confirm screen are the remaining UI. Needs on-device verification. Bundle with the real-phone session below.
-- **Real-phone verification** — M2 background capture on a physical phone, and M4/mDNS cross-device discovery on real Wi-Fi (both blocked on the emulator). One device session covers all of it.
+- **QR pairing UI — BUILT; camera scan needs your phone.** Desktop renders a scannable QR + SAS; Android has a "Scan to pair" button (ZXing) + reciprocal-pairing over the wire (so the camera-less desktop gets the phone's key). Proven device-independently (reverse-channel loopback test + QR encode/decode round-trip). The literal camera scan + on-device SAS check are the only unverified links — `m3` completes there.
+- **Real-phone verification** — M2 background capture on a physical phone, M4/mDNS cross-device discovery on real Wi-Fi, and the QR camera scan (all blocked on the emulator). One device session covers all of it.
 - **Image capture/apply wiring** — chunk transport is tested end to end, but neither platform yet captures/applies images (only text is wired into the engine).
 - **LTE + Tailscale sim** — Eric's on-device step.
 
