@@ -123,15 +123,15 @@ fun main() {
     appScope.launch {
         ClipboardWatcher(MacPasteboard()).changes().collect { clip ->
             val now = System.currentTimeMillis()
+            // Record locally only for a genuine capture; the engine returns false for an echo
+            // of a just-applied remote value, which the remote path already recorded.
             when (clip) {
-                is Clip.Text -> {
-                    repo.record(LOCAL_DEVICE_ID, clip.text, now)
-                    boot.engine.onLocalCapture(clip.text, now)
-                }
-                is Clip.Image -> {
-                    repo.recordImage(LOCAL_DEVICE_ID, clip.mime, clip.bytes.size, now)
-                    boot.engine.onLocalImageCapture(clip.bytes, clip.mime, now)
-                }
+                is Clip.Text ->
+                    if (boot.engine.onLocalCapture(clip.text, now)) repo.record(LOCAL_DEVICE_ID, clip.text, now)
+                is Clip.Image ->
+                    if (boot.engine.onLocalImageCapture(clip.bytes, clip.mime, now)) {
+                        repo.recordImage(LOCAL_DEVICE_ID, clip.mime, clip.bytes.size, now)
+                    }
             }
         }
     }

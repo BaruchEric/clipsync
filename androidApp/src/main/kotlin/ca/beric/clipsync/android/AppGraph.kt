@@ -186,10 +186,9 @@ object AppGraph {
                 .collect { clip ->
                     val now = System.currentTimeMillis()
                     when (clip) {
-                        is Clip.Text -> {
-                            repo.record(LOCAL_DEVICE_ID, clip.text, now)
-                            engine.onLocalCapture(clip.text, now)
-                        }
+                        // Record locally only for a genuine capture (engine returns false on echo).
+                        is Clip.Text ->
+                            if (engine.onLocalCapture(clip.text, now)) repo.record(LOCAL_DEVICE_ID, clip.text, now)
                         // Android clipboard image capture (content:// URIs via Shizuku) is not
                         // implemented yet; images received from a peer are handled by the applier.
                         is Clip.Image -> Unit

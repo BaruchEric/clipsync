@@ -78,14 +78,17 @@ class SyncEngine(
 
     // --- Local capture ---
 
-    /** Called when this device captures a new local clipboard text value. */
-    suspend fun onLocalCapture(text: String, nowMs: Long) {
+    /**
+     * Called when this device captures a new local clipboard text value. Returns false if the
+     * value was an echo of a just-applied remote value (so the caller does not record it locally).
+     */
+    suspend fun onLocalCapture(text: String, nowMs: Long): Boolean {
         val version: ClipVersion
         val targets: List<RemotePeer>
         mutex.withLock {
             if (text == suppressedEcho) {
                 suppressedEcho = null
-                return
+                return false
             }
             version = ClipVersion(deviceId, ++counter, nowMs)
             lww.recordLocal(version)
@@ -95,17 +98,21 @@ class SyncEngine(
             val sealed = ClipsyncCrypto.seal(peer.perPairKey, text.encodeToByteArray())
             peer.send(ControlMessage.ClipUpdate.of(version, "text", sealed))
         }
+        return true
     }
 
-    /** Called when this device captures a new local clipboard image. */
-    suspend fun onLocalImageCapture(bytes: ByteArray, mime: String, nowMs: Long) {
+    /**
+     * Called when this device captures a new local clipboard image. Returns false if the image
+     * was an echo of a just-applied remote image (so the caller does not record it locally).
+     */
+    suspend fun onLocalImageCapture(bytes: ByteArray, mime: String, nowMs: Long): Boolean {
         val imageHash = ClipsyncCrypto.toHex(ClipsyncCrypto.sha256(bytes))
         val version: ClipVersion
         val targets: List<RemotePeer>
         mutex.withLock {
             if (imageHash == suppressedImageHash) {
                 suppressedImageHash = null
-                return
+                return false
             }
             version = ClipVersion(deviceId, ++counter, nowMs)
             lww.recordLocal(version)
@@ -121,6 +128,7 @@ class SyncEngine(
                 peer.sendChunk(ChunkFrame.encode(transferSha, i, chunks.size, chunk))
             }
         }
+        return true
     }
 
     // --- Remote receive ---
