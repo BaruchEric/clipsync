@@ -165,7 +165,13 @@ object AppGraph {
             Log.w(TAG, "pair() rejected payload")
             return false
         }
-        Log.i(TAG, "paired ${peer.deviceId} name=${peer.deviceName} endpoints=${peer.addresses}")
+        // SAS in the log so an on-device pairing run can assert both screens agree without
+        // re-deriving the hash outside the app. It is a public comparison code, not key material.
+        Log.i(
+            TAG,
+            "paired ${peer.deviceId} name=${peer.deviceName} " +
+                "SAS=${ClipsyncCrypto.shortAuthString(peer.perPairKey)} endpoints=${peer.addresses}",
+        )
         return true
     }
 

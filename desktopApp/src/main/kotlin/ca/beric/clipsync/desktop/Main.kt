@@ -97,7 +97,18 @@ fun main() {
             scope = appScope,
             myPayload = { myPayload },
             // A phone that scanned this QR sends its payload back; pair it over the wire.
-            pairingSink = { json -> pairing.pair(json, System.currentTimeMillis())?.deviceId },
+            pairingSink = { json ->
+                pairing.pair(json, System.currentTimeMillis())?.let { peer ->
+                    // SAS on stdout so an on-device pairing run can assert the codes match
+                    // without re-deriving the hash outside the app. It is a public
+                    // comparison code, not key material.
+                    println(
+                        "clipsync: paired ${peer.deviceId} (${peer.deviceName}) " +
+                            "SAS=${ClipsyncCrypto.shortAuthString(peer.perPairKey)} endpoints=${peer.addresses}",
+                    )
+                    peer.deviceId
+                }
+            },
         )
         manager.startServer(SYNC_PORT, host = "0.0.0.0")
         // Symmetric P2P: also dial known peers (whichever side connects first wins; the
@@ -220,7 +231,10 @@ private fun watchPeerPayload(scope: CoroutineScope, pairing: PairingManager) {
                 val peer = pairing.pair(text, System.currentTimeMillis())
                 if (peer != null) {
                     lastPaired = text
-                    println("clipsync: paired ${peer.deviceId} (${peer.deviceName}) endpoints=${peer.addresses}")
+                    println(
+                        "clipsync: paired ${peer.deviceId} (${peer.deviceName}) " +
+                            "SAS=${ClipsyncCrypto.shortAuthString(peer.perPairKey)} endpoints=${peer.addresses}",
+                    )
                 } else {
                     println("clipsync: peer-payload.txt is not a valid payload")
                 }

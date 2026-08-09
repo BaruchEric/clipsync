@@ -9,11 +9,43 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 | Phase 0 fork due-diligence | ✅ GREENFIELD | `FORK-ASSESSMENT.md` |
 | M1 scaffold + macOS watcher | ✅ tag `m1` | copy on Mac → SQLDelight history (automated probe) |
 | M2 Android background capture | ✅ tag `m2` | **Shizuku** path; background copy from another app → history, survives Doze, on Android 16 emulator |
-| M3 crypto + pairing + identity | 🟡 core done (untagged) | XChaCha20-Poly1305 vector, X25519+SAS, 2-device pairing sim, real Keychain round-trip; **key derivation exercised live** in the sim. QR camera UI still pending. |
+| M3 crypto + pairing + identity | 🟢 **camera-scan gate met on real hardware** (untagged — tag `m3` when Eric confirms) | XChaCha20-Poly1305 vector, X25519+SAS, real Keychain round-trip; **live QR camera pairing Mac↔SM-S921U, SAS 773702 matching on both screens**. See "On-device pairing run" below. |
 | M4 LAN sync (transport + engine) | 🟢 **live sync working** (untagged) | Loopback TLS tests + **live Mac↔Android emulator sync, both directions, 447 ms, pinned TLS, E2E-encrypted**. mDNS: desktop half verified live, Android half unverifiable on emulator. |
 | M5 hardening | 🟢 built (untagged) | Persisted TLS identity, Android serves (symmetric), backoff dialer, status UI, CI. See DEFERRED-QUESTIONS "M5 hardening — DONE". |
 
 **49 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
+
+## On-device pairing run (2026-08-08) — VERIFIED
+
+Harness: `scripts/pairing-test.sh` (`preflight | reset | run | verify | evidence | sync | logs | stop`).
+Run against a physical **SM-S921U, Android 16** on the LAN, paired with the Mac desktop app.
+
+What `verify` asserted, all green:
+
+- QR **decodes to byte-identical** content to the app's own payload (248 B) — checked independently by
+  decoding a screenshot of the window, so a scan failure could never be blamed on the QR.
+- Camera scan accepted the payload (`clipsyncScan: scan-pair ok=true`).
+- Both sides derived the same key: **SAS 773702**, logged on both *and* shown on both screens
+  ("SM-S921U: 773702" on the Mac, "Mac: 773702" on the phone).
+- Reciprocal pairing over the wire worked — the camera-less desktop got the phone's key.
+- Peer row present in both DBs; TLS link established.
+- Bonus: Mac→phone text sync arrived intact on the real phone.
+
+Also proven here for the first time (the emulator could not): **`serving=true` on real Android hardware**
+— Netty binds on-device, so the phone advertises real addresses and P2P is genuinely symmetric.
+
+Two honest caveats:
+
+- The phone reached the Mac over the **tailnet** (`100.82.0.66 → 100.72.29.68`), not the LAN. It dials
+  the payload's address list in order, and the Mac advertises Parallels virtual interfaces
+  (`10.37.129.2`, `10.211.55.2`) ahead of the real LAN address. Worth filtering those out in
+  `localAddresses()`: this is not cosmetic — `PeerDialer` backs off 2s→60s per peer, so two dead
+  endpoints ahead of the live one add real latency to every *reconnect*, not just the first connect.
+  They also masked the LAN path in this run.
+- Shizuku is installed on the phone but **not started**, so clipboard *capture* on the phone
+  (and therefore the phone→Mac direction) is still unverified on real hardware.
+
+To reproduce: `./scripts/pairing-test.sh preflight` → `reset` → `run` → scan → `verify`.
 
 ## Live sim — how to reproduce
 1. Fresh DBs (schema changed since M2): `rm -f ~/Library/Application\ Support/clipsync/history.db*` and `adb shell run-as ca.beric.clipsync rm -f databases/clipsync.db databases/clipsync.db-journal`.
@@ -53,12 +85,17 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 - **README + AGPL LICENSE + F-Droid fastlane metadata** ✅.
 
 ### Genuinely remaining (needs Eric / a device)
-- **QR pairing UI — BUILT; camera scan needs your phone.** Desktop renders a scannable QR + SAS; Android has a "Scan to pair" button (ZXing) + reciprocal-pairing over the wire (so the camera-less desktop gets the phone's key). Proven device-independently (reverse-channel loopback test + QR encode/decode round-trip). The literal camera scan + on-device SAS check are the only unverified links — `m3` completes there.
-- **Real-phone verification** — M2 background capture on a physical phone, M4/mDNS cross-device discovery on real Wi-Fi, and the QR camera scan (all blocked on the emulator). One device session covers all of it.
+- ~~QR pairing UI camera scan~~ — **DONE on a real phone.** See "On-device pairing run" above.
+- **Real-phone verification** — still open: M2 background capture on a physical phone (needs Shizuku *started*, not just installed), M4/mDNS cross-device discovery on real Wi-Fi, and the phone→Mac clipboard direction. The LAN dial path is also still unexercised: the phone reached the Mac over the **tailnet** first, so LAN/mDNS remains unproven.
 - **Android image capture/apply** — the desktop + engine + transport image path is DONE and tested (Mac↔Mac images sync; a 200 KB image round-trips A→B over TLS; the macOS pasteboard capture/apply round-trips). Only Android remains: a clipboard image there is a `content://` URI + ContentProvider problem through Shizuku's shell-uid binder — real device work, not done (received images are dropped with a log). See DEFERRED-QUESTIONS "Image sync".
 - **LTE + Tailscale sim** — Eric's on-device step.
 
-## Sim harness already in place
+## Harnesses already in place
+- **`scripts/pairing-test.sh`** — the on-device harness described above. Resolves the phone's LAN
+  adb transport itself (the phone shows up 3× alongside an emulator), refuses to pass on stale
+  pairing state, and asserts the SAS from *both apps' own logs* rather than re-deriving the hash
+  outside the app. `evidence` screenshots both screens by CGWindowID (region capture silently grabs
+  whatever occludes the tray window — it did, twice).
 - Android 16 AVD `clipsync-a16` (API 36, google_apis, arm64); Shizuku installed + authorized for clipsync; `cliptester` helper APK (scratchpad `cliphelper/`, appId `ca.beric.cliptester`) injects clipboard text from a separate uid via `am start -n ca.beric.cliptester/.SetClipActivity --es text "…"`.
 - Emulators/AVDs and the CrossPaste reference clone (`~/Arik/dev/_reference/crosspaste-desktop`) persist outside the repo.
 
