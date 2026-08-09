@@ -2,6 +2,7 @@ package ca.beric.clipsync.android
 
 import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
@@ -28,27 +29,53 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import ca.beric.clipsync.R
+import ca.beric.clipsync.android.capture.SyncForegroundService
 import ca.beric.clipsync.core.ClipEntry
+import rikka.shizuku.Shizuku
 
 class MainActivity : ComponentActivity() {
 
     private val refreshTick = mutableIntStateOf(0)
+
+    private val shizukuPermissionListener =
+        Shizuku.OnRequestPermissionResultListener { _, _ -> refreshTick.intValue += 1 }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        AppGraph.init(this)
+        SyncForegroundService.start(this)
+        runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
+        setContent { Screen() }
+    }
 
     override fun onResume() {
         super.onResume()
         refreshTick.intValue += 1
     }
 
-    private fun accessibilityEnabled(): Boolean =
-        Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-            ?.contains(packageName) == true
+    override fun onDestroy() {
+        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
+        super.onDestroy()
+    }
+
+    private fun shizukuAvailable(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+
+    private fun shizukuGranted(): Boolean =
+        runCatching { Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED }
+            .getOrDefault(false)
+
+    private fun requestShizuku() {
+        runCatching {
+            if (Shizuku.shouldShowRequestPermissionRationale()) return@runCatching
+            Shizuku.requestPermission(SHIZUKU_REQUEST_CODE)
+        }
+    }
 
     private fun notificationsEnabled(): Boolean =
         getSystemService(NotificationManager::class.java).areNotificationsEnabled()
@@ -56,67 +83,61 @@ class MainActivity : ComponentActivity() {
     private fun batteryExempt(): Boolean =
         getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        AppGraph.init(this)
-        setContent {
-            val tick by refreshTick
-            val showDisclosure = remember { mutableStateOf(false) }
-            val entries by AppGraph.repo.observeHistory().collectAsState(initial = emptyList())
-            MaterialTheme {
-                Column(
-                    Modifier.fillMaxSize().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("clipsync", style = MaterialTheme.typography.headlineSmall)
+    @Composable
+    private fun Screen() {
+        val tick by refreshTick
+        val entries by AppGraph.repo.observeHistory().collectAsState(initial = emptyList())
+        MaterialTheme {
+            Column(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("clipsync", style = MaterialTheme.typography.headlineSmall)
 
-                    // key(tick) re-evaluates grant states after returning from Settings
-                    key(tick) {
-                        if (!accessibilityEnabled()) {
-                            if (!showDisclosure.value) {
-                                StatusCard(
-                                    "Clipboard capture is off",
-                                    "Grant the accessibility permission to capture copies system-wide.",
-                                    "Learn more",
-                                ) { showDisclosure.value = true }
-                            } else {
-                                DisclosureCard {
-                                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                }
-                            }
-                        }
-                        if (!notificationsEnabled()) {
-                            StatusCard(
-                                "Notifications are off",
-                                "The sync engine shows a persistent notification while running.",
-                                "Enable",
-                            ) {
-                                startActivity(
-                                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
-                                )
-                            }
-                        }
-                        if (!batteryExempt()) {
-                            StatusCard(
-                                "Battery optimization is on",
-                                "Exempting clipsync helps capture survive Doze.",
-                                "Exempt",
-                            ) {
-                                startActivity(
-                                    Intent(
-                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                        Uri.parse("package:$packageName"),
-                                    ),
-                                )
-                            }
+                key(tick) {
+                    when {
+                        !shizukuAvailable() -> StatusCard(
+                            "Shizuku not running",
+                            "Install Shizuku and start it (wireless debugging or root). clipsync reads the clipboard through it.",
+                            "What's this?",
+                        ) { refreshTick.intValue += 1 }
+                        !shizukuGranted() -> DisclosureCard { requestShizuku() }
+                    }
+                    if (!notificationsEnabled()) {
+                        StatusCard(
+                            "Notifications are off",
+                            "The sync engine shows a persistent notification while running.",
+                            "Enable",
+                        ) {
+                            startActivity(
+                                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+                            )
                         }
                     }
-
-                    HistoryList(entries)
+                    if (!batteryExempt()) {
+                        StatusCard(
+                            "Battery optimization is on",
+                            "Exempting clipsync helps capture survive Doze.",
+                            "Exempt",
+                        ) {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                    Uri.parse("package:$packageName"),
+                                ),
+                            )
+                        }
+                    }
                 }
+
+                HistoryList(entries)
             }
         }
+    }
+
+    companion object {
+        private const val SHIZUKU_REQUEST_CODE = 4001
     }
 }
 
@@ -141,7 +162,7 @@ private fun DisclosureCard(onProceed: () -> Unit) {
             Text(stringResource(R.string.disclosure_title), style = MaterialTheme.typography.titleSmall)
             Text(stringResource(R.string.disclosure_body), style = MaterialTheme.typography.bodySmall)
             Button(onClick = onProceed, modifier = Modifier.fillMaxWidth()) {
-                Text("Open accessibility settings")
+                Text("Grant clipsync access via Shizuku")
             }
         }
     }

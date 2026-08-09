@@ -24,9 +24,18 @@ CrossPaste fork rejected — Android app is closed-source (see `FORK-ASSESSMENT.
 - **Sync:** last-write-wins on (deviceId, monotonicCounter, wallClockMs). Single latest value; no CRDTs.
 - **Content:** plain text + PNG/JPEG. 1 MiB inline cap; larger images = metadata frame (type, size, SHA-256) + chunked binary frames on the same TLS socket.
 
-## Android capture (locked — the hard part)
+## Android capture (REVISED 2026-08-08 — locked premise overturned by evidence, user-approved pivot)
 
-AccessibilityService capture + foreground service (persistent notification) for the sync engine. minSdk 29, targetSdk latest stable. F-Droid primary, sideload secondary; no Play-policy compromises. Honest accessibility disclosure copy (what's read, why, data goes only to the user's own paired devices, E2E encrypted). Battery: multicast lock held only during discovery windows; WS keepalive tuned for Doze. v1.1 (not MVP): Shizuku + READ_LOGS capture mode.
+**Original locked design (AccessibilityService background clipboard read) is impossible on Android 15 AND 16.** Proven on API 35 + API 36 emulators: AOSP `ClipboardService` denies background reads to a normal/accessibility app's UID through every path (change listener, a11y-event-dispatch read, foreground-service poll). The check exempts only the focused app, the default IME, holders of privileged `READ_CLIPBOARD_IN_BACKGROUND`, and the SHELL/ROOT/SYSTEM uids. See `BLOCKER-M2-android-capture.md`.
+
+**Approved replacement — Shizuku as the MVP capture mechanism:**
+- Shizuku runs a service as the SHELL uid (2000), which AOSP *does* exempt from the focus check. clipsync reads `getPrimaryClip()` via a `ShizukuBinderWrapper` around the `IClipboard` system service, so the call executes with shell identity → background read succeeds. Verified feasible: Shizuku server starts as shell on the emulator.
+- Capture = foreground `dataSync` service that polls the clipboard through Shizuku (~1 s) into `ClipRepository`. No AccessibilityService needed for capture.
+- **Fallback (zero-setup, best-effort):** AccessibilityService node-text reading — read the source field's text from the `AccessibilityNodeInfo` on copy/selection events, bypassing the clipboard API. Misses WebView/image/notification copies; reads screen content. Offered when Shizuku is unavailable. Deferred: implement after the M2 Shizuku path proves out.
+- User setup: install Shizuku (F-Droid/GitHub, open-source), start it once per boot via wireless debugging or root. Real system-wide background capture — priority #1 preserved; simply not zero-setup.
+- minSdk 29, targetSdk latest stable. F-Droid primary, sideload secondary. Honest disclosure: clipsync reads the clipboard (via Shizuku) to sync copies; data goes only to the user's own paired devices, E2E encrypted; no servers.
+- Battery: multicast lock only during discovery windows; WS keepalive tuned for Doze.
+- Dropped: the v1.1 "Shizuku + READ_LOGS" idea — modern `ClipboardService` no longer logs clip content, so READ_LOGS yields nothing.
 
 ## Derived decisions (implied by acceptance criteria, recorded here)
 

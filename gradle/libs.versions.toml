@@ -6,6 +6,8 @@ sqldelight = "2.3.2"
 coroutines = "1.11.0"
 jna = "5.19.1"
 activityCompose = "1.10.1"
+shizuku = "13.1.5"
+hiddenApiBypass = "6.1"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -18,6 +20,9 @@ sqldelight-driver-android = { module = "app.cash.sqldelight:android-driver", ver
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+shizuku-api = { module = "dev.rikka.shizuku:api", version.ref = "shizuku" }
+shizuku-provider = { module = "dev.rikka.shizuku:provider", version.ref = "shizuku" }
+hiddenapibypass = { module = "org.lsposed.hiddenapibypass:hiddenapibypass", version.ref = "hiddenApiBypass" }
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

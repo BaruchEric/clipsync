@@ -1,6 +1,8 @@
 # BLOCKER — M2 Android background clipboard capture
 
-**Date:** 2026-08-08 · **Status:** locked design proven impossible as specified → stop-and-report per working agreement.
+**RESOLVED 2026-08-08 → Shizuku (user-approved).** Background capture now works on Android 16: clipsync reads `IClipboard.getPrimaryClip` through Shizuku's SHELL-uid binder (`ShizukuClipboard`), driven by the foreground-service poll. Two things were required: (1) route the read through Shizuku (SHELL uid is exempt from the AOSP focus check), and (2) `HiddenApiBypass.addHiddenApiExemptions("")` at app startup, because hidden-API enforcement was filtering `getPrimaryClip` out of reflection results. Verified: a copy from a separate app while clipsync is fully backgrounded lands in the DB, and survives `deviceidle force-idle`. Resolved signature on API 36: `getPrimaryClip(String pkg, String attributionTag, int userId, int deviceId)`.
+
+**Date:** 2026-08-08 · **Status:** original locked design impossible → pivoted to Shizuku (resolved).
 **Tested on:** Android 15 (API 35) AND Android 16 (API 36.1, the project's `targetSdk`) Google-APIs emulators, arm64. **Identical denial on both.** Real-hardware confirmation still owed by Eric.
 
 ## Android 16 confirmation (2026-08-08)

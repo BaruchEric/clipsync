@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">clipsync</string>
-    <string name="accessibility_service_description">clipsync uses this service only to notice when the clipboard changes, because Android blocks background clipboard access for normal apps. It reads the clipboard content when you copy — nothing else. It does not read your screen, log keystrokes, or collect analytics. Clipboard data goes only to your own paired devices, end-to-end encrypted. Nothing is sent to any server.</string>
-    <string name="disclosure_title">Why clipsync needs the accessibility permission</string>
-    <string name="disclosure_body">Android 10+ blocks apps from reading the clipboard in the background. The accessibility service is the only reliable way for clipsync to capture what you copy, system-wide.\n\nWhat it reads: the clipboard, when its content changes. Nothing else.\nWhat it never does: read screen content, log keystrokes, collect analytics.\nWhere your data goes: only to your own paired devices, end-to-end encrypted. There is no server.</string>
+    <string name="disclosure_title">How clipsync captures your clipboard</string>
+    <string name="disclosure_body">Android blocks apps from reading the clipboard in the background. clipsync uses Shizuku — a separate open-source app you start once per boot — to read the clipboard with the same privilege the system shell has.\n\nWhat it reads: the clipboard, when its content changes.\nWhat it never does: read your screen, log keystrokes, or collect analytics.\nWhere your data goes: only to your own paired devices, end-to-end encrypted. There is no server.</string>
 </resources>

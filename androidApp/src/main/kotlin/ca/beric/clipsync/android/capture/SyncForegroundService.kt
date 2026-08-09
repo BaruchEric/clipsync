@@ -4,59 +4,64 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
 import ca.beric.clipsync.android.AppGraph
+import ca.beric.clipsync.core.LOCAL_DEVICE_ID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Keeps the process alive with a persistent notification. From M4 this
- * service hosts the sync engine (mDNS + WebSocket connections).
+ * Hosts clipboard capture (via Shizuku) and, from M4, the sync engine. Runs as a
+ * persistent foreground service so the process survives while backgrounded.
  *
- * DIAGNOSTIC (M2): also polls the clipboard every 2s and logs whether the
- * read succeeded, to determine empirically whether a foreground service can
- * read the clipboard while the app is backgrounded on Android 15.
+ * Capture polls the clipboard through [ShizukuClipboard] (~1 s). Shizuku's
+ * shell-uid identity is what makes the background read succeed on Android 10+.
  */
 class SyncForegroundService : Service() {
 
     private var pollJob: Job? = null
+    private lateinit var shizukuClipboard: ShizukuClipboard
 
     override fun onCreate() {
         super.onCreate()
         AppGraph.init(applicationContext)
+        shizukuClipboard = ShizukuClipboard(applicationContext)
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "clipsync sync engine", NotificationManager.IMPORTANCE_MIN),
         )
-        val notification = Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_menu_share)
-            .setContentTitle("clipsync is running")
-            .setContentText("Syncing your clipboard only to your own paired devices.")
-            .build()
-        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         Log.i(TAG, "SyncForegroundService started (BUILD_ID=$BUILD_ID)")
         startPolling()
     }
 
+    private fun buildNotification(): Notification =
+        Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_share)
+            .setContentTitle("clipsync is running")
+            .setContentText("Syncing your clipboard only to your own paired devices.")
+            .build()
+
     private fun startPolling() {
-        val clipboard = getSystemService(ClipboardManager::class.java)
         pollJob = AppGraph.scope.launch {
+            var wasReady = false
             while (isActive) {
-                delay(2000)
-                try {
-                    val clip = clipboard.primaryClip
-                    val text = clip?.takeIf { it.itemCount > 0 }
-                        ?.getItemAt(0)?.coerceToText(this@SyncForegroundService)?.toString()
-                    Log.i(TAG, "poll read: text=${text?.take(24)} (null=${text == null})")
-                } catch (t: Throwable) {
-                    Log.w(TAG, "poll read threw: ${t.javaClass.simpleName}: ${t.message}")
+                delay(POLL_INTERVAL_MS)
+                val ready = shizukuClipboard.isReady()
+                if (ready != wasReady) {
+                    Log.i(TAG, "Shizuku capture ${if (ready) "active" else "unavailable"}")
+                    wasReady = ready
+                }
+                if (!ready) continue
+                val text = shizukuClipboard.readText()
+                if (!text.isNullOrBlank()) {
+                    AppGraph.repo.record(LOCAL_DEVICE_ID, text, System.currentTimeMillis())
                 }
             }
         }
@@ -72,10 +77,11 @@ class SyncForegroundService : Service() {
     }
 
     companion object {
-        const val BUILD_ID = "m2-diag-1"
+        const val BUILD_ID = "m2-shizuku-2"
         private const val TAG = "clipsyncFg"
         private const val CHANNEL_ID = "clipsync"
         private const val NOTIFICATION_ID = 1
+        private const val POLL_INTERVAL_MS = 1000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, SyncForegroundService::class.java))

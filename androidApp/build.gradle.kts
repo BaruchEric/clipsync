@@ -29,4 +29,7 @@ dependencies {
     implementation(compose.material3)
     implementation(compose.ui)
     implementation(compose.foundation)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+    implementation(libs.hiddenapibypass)
 }

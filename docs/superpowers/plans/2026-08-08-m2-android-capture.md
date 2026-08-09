@@ -1,5 +1,10 @@
 # M2 — Android Capture Plan
 
+> **SUPERSEDED 2026-08-08.** The AccessibilityService approach below proved impossible on Android 15/16 (see `BLOCKER-M2-android-capture.md`). M2 was delivered via **Shizuku** instead (user-approved): foreground `dataSync` service polls `IClipboard.getPrimaryClip` through Shizuku's SHELL-uid binder, with `HiddenApiBypass` to un-hide the reflective method. Verified on Android 16: background capture from a separate app lands in history and survives Doze. The plan text below is kept for the investigation record only.
+
+---
+
+
 **Goal:** system-wide clipboard capture on Android via AccessibilityService + foreground service; honest disclosure onboarding; survives screen-off and Doze. Acceptance simulated on emulator (AVD `clipsync-test`, android-35 google_apis) since no physical phone is attached; Eric spot-checks on real hardware later.
 
 **Mechanism:** an enabled AccessibilityService exempts the app from Android 10+ background clipboard-read restrictions. We do NOT parse accessibility events — the service registers `ClipboardManager.OnPrimaryClipChangedListener` in `onServiceConnected` and reads `primaryClip` text on change. A `dataSync` foreground service (persistent notification) keeps the process alive; it will host the sync engine from M4.
