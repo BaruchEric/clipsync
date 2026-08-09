@@ -1,0 +1,25 @@
+CREATE TABLE peer (
+    device_id TEXT PRIMARY KEY,
+    device_name TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    cert_fingerprint TEXT NOT NULL,
+    per_pair_key BLOB NOT NULL,
+    addresses TEXT NOT NULL,
+    paired_at_ms INTEGER NOT NULL
+);
+
+upsert:
+INSERT OR REPLACE INTO peer(device_id, device_name, public_key, cert_fingerprint, per_pair_key, addresses, paired_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectAll:
+SELECT * FROM peer ORDER BY paired_at_ms DESC;
+
+getById:
+SELECT * FROM peer WHERE device_id = ?;
+
+updateAddresses:
+UPDATE peer SET addresses = ? WHERE device_id = ?;
+
+delete:
+DELETE FROM peer WHERE device_id = ?;
