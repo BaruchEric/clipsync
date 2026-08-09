@@ -57,9 +57,12 @@ open desktopApp/build/compose/binaries/main/app/clipsync.app
 
 ## Pairing (current state)
 
-The pairing key exchange and the full transport are implemented and tested; the QR-camera scan
-UI is the remaining piece. Until it lands, pair by exchanging the pairing payload out-of-band
-(each side prints/logs its own payload). See `HANDOFF.md` for the exact steps used in testing.
+The pairing key exchange and the full transport are implemented and tested, and the QR-camera scan
+has been verified on real hardware (Mac ↔ SM-S921U, matching SAS on both screens). The desktop shows
+a QR; the phone scans it and sends its own payload back over the wire so the camera-less side gets
+the matching key. Pairing by exchanging the payload out-of-band (each side prints/logs its own) still
+works as a headless fallback. `scripts/pairing-test.sh` drives and asserts the whole on-device run
+(`preflight | reset | run | verify | evidence | sync | logs | stop`). See `HANDOFF.md` for details.
 
 ## Project layout
 

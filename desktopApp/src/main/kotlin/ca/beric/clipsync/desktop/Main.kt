@@ -40,6 +40,7 @@ import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.PeerStore
+import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.DesktopClipboardApplier
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transport.ConnectionManager
@@ -100,12 +101,9 @@ fun main() {
             pairingSink = { json ->
                 pairing.pair(json, System.currentTimeMillis())?.let { peer ->
                     // SAS on stdout so an on-device pairing run can assert the codes match
-                    // without re-deriving the hash outside the app. It is a public
-                    // comparison code, not key material.
-                    println(
-                        "clipsync: paired ${peer.deviceId} (${peer.deviceName}) " +
-                            "SAS=${ClipsyncCrypto.shortAuthString(peer.perPairKey)} endpoints=${peer.addresses}",
-                    )
+                    // without re-deriving the hash outside the app. via=wire is what proves
+                    // reciprocal pairing actually crossed the network.
+                    println("clipsync: ${peer.pairedLogLine(via = "wire")}")
                     peer.deviceId
                 }
             },
@@ -231,10 +229,9 @@ private fun watchPeerPayload(scope: CoroutineScope, pairing: PairingManager) {
                 val peer = pairing.pair(text, System.currentTimeMillis())
                 if (peer != null) {
                     lastPaired = text
-                    println(
-                        "clipsync: paired ${peer.deviceId} (${peer.deviceName}) " +
-                            "SAS=${ClipsyncCrypto.shortAuthString(peer.perPairKey)} endpoints=${peer.addresses}",
-                    )
+                    // via=file: this is the out-of-band bootstrap, NOT reciprocal pairing over
+                    // the wire. The harness relies on the two being distinguishable.
+                    println("clipsync: ${peer.pairedLogLine(via = "file")}")
                 } else {
                     println("clipsync: peer-payload.txt is not a valid payload")
                 }

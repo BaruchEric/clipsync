@@ -18,6 +18,7 @@ import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.PeerStore
+import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transport.ConnectionManager
 import ca.beric.clipsync.transport.PeerDialer
@@ -103,7 +104,14 @@ object AppGraph {
                 scope = scope,
                 // myPayload is set just below (after serving is known); the lambda reads it lazily.
                 myPayload = { myPayload },
-                pairingSink = { json -> pairing.pair(json, System.currentTimeMillis())?.deviceId },
+                // Same SAS log as the local/scan path: a peer that pairs us over the wire must
+                // leave the same evidence, or an on-device run reports "never derived a key".
+                pairingSink = { json ->
+                    pairing.pair(json, System.currentTimeMillis())?.let { peer ->
+                        Log.i(TAG, peer.pairedLogLine(via = "wire"))
+                        peer.deviceId
+                    }
+                },
             )
             connectionManager = manager
             // Netty-on-Android is the least-proven thing here: a server failure must not
@@ -167,11 +175,7 @@ object AppGraph {
         }
         // SAS in the log so an on-device pairing run can assert both screens agree without
         // re-deriving the hash outside the app. It is a public comparison code, not key material.
-        Log.i(
-            TAG,
-            "paired ${peer.deviceId} name=${peer.deviceName} " +
-                "SAS=${ClipsyncCrypto.shortAuthString(peer.perPairKey)} endpoints=${peer.addresses}",
-        )
+        Log.i(TAG, peer.pairedLogLine(via = "local"))
         return true
     }
 

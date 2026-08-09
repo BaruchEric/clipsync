@@ -20,16 +20,27 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 Harness: `scripts/pairing-test.sh` (`preflight | reset | run | verify | evidence | sync | logs | stop`).
 Run against a physical **SM-S921U, Android 16** on the LAN, paired with the Mac desktop app.
 
-What `verify` asserted, all green:
+What the run established, all green:
 
-- QR **decodes to byte-identical** content to the app's own payload (248 B) — checked independently by
-  decoding a screenshot of the window, so a scan failure could never be blamed on the QR.
-- Camera scan accepted the payload (`clipsyncScan: scan-pair ok=true`).
+- Camera scan accepted the payload (`clipsyncScan: scan-pair ok=true`). — *asserted by `verify`*
 - Both sides derived the same key: **SAS 773702**, logged on both *and* shown on both screens
-  ("SM-S921U: 773702" on the Mac, "Mac: 773702" on the phone).
-- Reciprocal pairing over the wire worked — the camera-less desktop got the phone's key.
-- Peer row present in both DBs; TLS link established.
-- Bonus: Mac→phone text sync arrived intact on the real phone.
+  ("SM-S921U: 773702" on the Mac, "Mac: 773702" on the phone). — *asserted by `verify`*
+- Reciprocal pairing over the wire worked — the camera-less desktop got the phone's key. — *asserted by
+  `verify`, which now requires the desktop's `via=wire` log line specifically; the byte-identical
+  `via=file` line from the `peer-payload.txt` poller no longer satisfies it.*
+- Peer row present in both DBs; TLS link established. — *asserted by `verify`*
+- Bonus: Mac→phone text sync arrived intact on the real phone. — *`sync`; it now also asserts the
+  applier's own `applyText … ok=true`, because the history row is written before the clipboard write
+  and so passes even when the write fails.*
+- QR **decodes to byte-identical** content to the app's own payload (248 B) — checked by decoding a
+  screenshot of the window, so a scan failure could never be blamed on the QR. **This one was a manual
+  step during the run, not something `verify` re-checks** — there is no QR decode in the harness.
+
+**Re-certifying needs a fresh `run`.** `verify` now demands the desktop's `via=wire` pairing line, and
+the stored logs from this run predate that marker — replaying `verify` against them reports "desktop
+never paired over the wire". That is the assertion getting stricter, not evidence the run was fake
+(`peer-payload.txt` was absent throughout). The originals are kept at
+`build/pairing-test/archive-2026-08-08-m3/`, since `run` truncates both logs unconditionally.
 
 Also proven here for the first time (the emulator could not): **`serving=true` on real Android hardware**
 — Netty binds on-device, so the phone advertises real addresses and P2P is genuinely symmetric.
@@ -91,11 +102,17 @@ To reproduce: `./scripts/pairing-test.sh preflight` → `reset` → `run` → sc
 - **LTE + Tailscale sim** — Eric's on-device step.
 
 ## Harnesses already in place
-- **`scripts/pairing-test.sh`** — the on-device harness described above. Resolves the phone's LAN
-  adb transport itself (the phone shows up 3× alongside an emulator), refuses to pass on stale
-  pairing state, and asserts the SAS from *both apps' own logs* rather than re-deriving the hash
-  outside the app. `evidence` screenshots both screens by CGWindowID (region capture silently grabs
-  whatever occludes the tray window — it did, twice).
+- **`scripts/pairing-test.sh`** — the on-device harness described above. Prefers the phone's LAN adb
+  transport (the phone shows up 3× alongside an emulator) but falls back to tailnet/USB rather than
+  refusing to run, and asserts the SAS from *both apps' own logs* rather than re-deriving the hash
+  outside the app. `run` force-stops the phone app so this run's log actually contains this run's
+  startup lines, and refuses to start behind an already-running desktop whose stdout it cannot read.
+  `evidence` screenshots both screens by CGWindowID (region capture silently grabs whatever occludes
+  the tray window — it did, twice).
+  Stale-state handling is a *warning*, not a gate: `preflight` flags leftover peer rows and a leftover
+  `peer-payload.txt` with `→`, and only `reset` actually clears them. What stops a stale pass is
+  narrower and load-bearing — `run` truncates both logs, and `verify` only accepts the desktop's
+  `via=wire` pairing line. `verify` does *not* check how old the run was.
 - Android 16 AVD `clipsync-a16` (API 36, google_apis, arm64); Shizuku installed + authorized for clipsync; `cliptester` helper APK (scratchpad `cliphelper/`, appId `ca.beric.cliptester`) injects clipboard text from a separate uid via `am start -n ca.beric.cliptester/.SetClipActivity --es text "…"`.
 - Emulators/AVDs and the CrossPaste reference clone (`~/Arik/dev/_reference/crosspaste-desktop`) persist outside the repo.
 
