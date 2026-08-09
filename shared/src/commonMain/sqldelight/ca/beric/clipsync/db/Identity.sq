@@ -1,0 +1,13 @@
+CREATE TABLE identity (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    device_id TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    public_key BLOB NOT NULL
+);
+
+get:
+SELECT * FROM identity WHERE id = 0;
+
+put:
+INSERT OR REPLACE INTO identity(id, device_id, device_name, public_key)
+VALUES (0, ?, ?, ?);
