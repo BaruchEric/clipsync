@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Base64
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import ca.beric.clipsync.R
 import ca.beric.clipsync.android.capture.SyncForegroundService
 import ca.beric.clipsync.core.ClipEntry
+import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
 class MainActivity : ComponentActivity() {
@@ -49,9 +52,38 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppGraph.init(this)
+        AppGraph.startSync(this)
         SyncForegroundService.start(this)
         runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
+        handlePairingIntent(intent)
         setContent { Screen() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handlePairingIntent(intent)
+    }
+
+    /**
+     * Accepts a peer's pairing payload injected via
+     *   adb shell am start -n ca.beric.clipsync/.MainActivity --es pairing_payload_b64 <base64>
+     * Base64 avoids the double shell-quoting hazard of passing raw JSON through adb.
+     */
+    private fun handlePairingIntent(intent: Intent?) {
+        val payload = intent?.let { readPayloadExtra(it) } ?: return
+        AppGraph.scope.launch {
+            val ok = AppGraph.pair(payload)
+            Log.i("clipsyncPair", "pair-from-intent ok=$ok")
+            refreshTick.intValue += 1
+        }
+    }
+
+    private fun readPayloadExtra(intent: Intent): String? {
+        intent.getStringExtra("pairing_payload_b64")?.let { b64 ->
+            return runCatching { String(Base64.decode(b64, Base64.DEFAULT)) }.getOrNull()
+        }
+        return intent.getStringExtra("pairing_payload")
     }
 
     override fun onResume() {

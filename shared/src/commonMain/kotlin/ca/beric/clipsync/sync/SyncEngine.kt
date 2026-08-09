@@ -5,6 +5,8 @@ import ca.beric.clipsync.crypto.ClipsyncCrypto
 import ca.beric.clipsync.protocol.ClipVersion
 import ca.beric.clipsync.protocol.ControlMessage
 import ca.beric.clipsync.protocol.LwwResolver
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Writes a received value into the local system clipboard. Platform-specific. */
 interface ClipboardApplier {
@@ -21,11 +23,16 @@ class RemotePeer(
 /**
  * The sync brain, independent of transport. On a local copy it stamps a version,
  * seals the payload per peer, and broadcasts. On a remote update it applies LWW,
- * decrypts, writes the value to the local clipboard, and records history.
+ * decrypts, records history, then writes the value to the local clipboard.
  *
  * Echo suppression: applying a remote value re-triggers local capture; the applied
  * text is remembered once so it is not immediately rebroadcast, and the per-device
  * LWW counter rejects any that slips through.
+ *
+ * Thread safety: capture runs on the poll coroutine while peers are added/removed on
+ * connection coroutines (Netty/OkHttp threads). All mutable state ([peers], [counter],
+ * [suppressedEcho], [lww]) is guarded by [mutex]; network sends happen outside the lock
+ * against a snapshot so I/O never blocks other engine operations.
  */
 class SyncEngine(
     private val deviceId: String,
@@ -34,26 +41,33 @@ class SyncEngine(
 ) {
     private val lww = LwwResolver()
     private val peers = mutableMapOf<String, RemotePeer>()
+    private val mutex = Mutex()
     private var counter = 0L
     private var suppressedEcho: String? = null
 
-    fun addPeer(peer: RemotePeer) {
+    suspend fun addPeer(peer: RemotePeer) = mutex.withLock {
         peers[peer.deviceId] = peer
     }
 
-    fun removePeer(deviceId: String) {
+    suspend fun removePeer(deviceId: String) = mutex.withLock {
         peers.remove(deviceId)
+        Unit
     }
 
     /** Called when this device captures a new local clipboard value. */
     suspend fun onLocalCapture(text: String, nowMs: Long) {
-        if (text == suppressedEcho) {
-            suppressedEcho = null
-            return
+        val version: ClipVersion
+        val targets: List<RemotePeer>
+        mutex.withLock {
+            if (text == suppressedEcho) {
+                suppressedEcho = null
+                return
+            }
+            version = ClipVersion(deviceId, ++counter, nowMs)
+            lww.recordLocal(version)
+            targets = peers.values.toList()
         }
-        val version = ClipVersion(deviceId, ++counter, nowMs)
-        lww.recordLocal(version)
-        for (peer in peers.values) {
+        for (peer in targets) {
             val sealed = ClipsyncCrypto.seal(peer.perPairKey, text.encodeToByteArray())
             peer.send(ControlMessage.ClipUpdate.of(version, "text", sealed))
         }
@@ -68,12 +82,17 @@ class SyncEngine(
     }
 
     private suspend fun applyRemoteClip(fromDeviceId: String, update: ControlMessage.ClipUpdate) {
-        val peer = peers[fromDeviceId] ?: return
-        if (!lww.accept(update.version)) return
-        val plain = ClipsyncCrypto.open(peer.perPairKey, update.sealedBytes) ?: return
-        val text = plain.decodeToString()
-        suppressedEcho = text
-        applier.applyText(text)
+        val text = mutex.withLock {
+            val peer = peers[fromDeviceId] ?: return
+            if (!lww.accept(update.version)) return
+            val plain = ClipsyncCrypto.open(peer.perPairKey, update.sealedBytes) ?: return
+            val decoded = plain.decodeToString()
+            suppressedEcho = decoded
+            decoded
+        }
+        // Record before applying: applying re-triggers local capture, which could
+        // otherwise record the value as LOCAL_DEVICE_ID first and mis-attribute history.
         repository.record(update.version.deviceId, text, update.version.wallClockMs)
+        applier.applyText(text)
     }
 }

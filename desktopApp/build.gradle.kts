@@ -1,3 +1,5 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+
 plugins {
     alias(libs.plugins.kotlinJvm)
     alias(libs.plugins.composeMultiplatform)
@@ -16,5 +18,13 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "ca.beric.clipsync.desktop.MainKt"
+        nativeDistributions {
+            targetFormats(TargetFormat.Dmg)
+            packageName = "clipsync"
+            packageVersion = "1.0.0"
+            // jlink strips modules it can't infer from bytecode: SQLDelight's JDBC driver
+            // needs java.sql; JSSE EC (TLS) needs jdk.crypto.ec.
+            modules("java.sql", "jdk.crypto.ec", "java.naming")
+        }
     }
 }
