@@ -19,6 +19,7 @@ import ca.beric.clipsync.core.ClipboardWatcher
 import ca.beric.clipsync.core.LOCAL_DEVICE_ID
 import ca.beric.clipsync.core.MacPasteboard
 import ca.beric.clipsync.crypto.ClipsyncCrypto
+import ca.beric.clipsync.discovery.JmDnsDiscovery
 import ca.beric.clipsync.db.ClipsyncDb
 import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
@@ -82,6 +83,15 @@ fun main() {
         // Symmetric P2P: also dial known peers (whichever side connects first wins; the
         // manager dedups the duplicate link). Backoff keeps an offline peer cheap.
         PeerDialer(manager, peerStore, appScope).start()
+        // mDNS: advertise self and dial paired peers the moment they appear on the LAN.
+        runCatching {
+            JmDnsDiscovery().start(identity.deviceId, SYNC_PORT) { found ->
+                val peer = peerStore.get(found.deviceId) ?: return@start
+                appScope.launch {
+                    manager.dialPeer(found.deviceId, listOf("${found.host}:${found.port}"), peer.certFingerprint)
+                }
+            }
+        }.onFailure { println("clipsync: mDNS unavailable: ${it.message}") }
         val pairing = PairingManager(identity, peerStore)
         writePairingFiles(pairing, tls.fingerprint, SYNC_PORT)
         watchPeerPayload(appScope, pairing)

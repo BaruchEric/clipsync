@@ -44,6 +44,7 @@ kotlin {
             dependencies {
                 implementation(libs.jna)
                 implementation(libs.sqldelight.driver.sqlite)
+                implementation(libs.jmdns)
             }
         }
         val desktopTest by getting {
@@ -72,4 +73,6 @@ sqldelight {
 
 tasks.named<Test>("desktopTest") {
     systemProperty("java.awt.headless", "false")
+    // Forward the opt-in flag for the multicast-dependent mDNS smoke test to the test JVM.
+    System.getProperty("clipsync.mdns.test")?.let { systemProperty("clipsync.mdns.test", it) }
 }

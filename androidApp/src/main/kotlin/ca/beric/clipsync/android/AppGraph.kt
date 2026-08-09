@@ -11,6 +11,7 @@ import ca.beric.clipsync.core.ClipboardWatcher
 import ca.beric.clipsync.core.LOCAL_DEVICE_ID
 import ca.beric.clipsync.crypto.ClipsyncCrypto
 import ca.beric.clipsync.db.ClipsyncDb
+import ca.beric.clipsync.discovery.NsdDiscovery
 import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
@@ -103,6 +104,17 @@ object AppGraph {
 
             startCapture(engine, clipboard)
             PeerDialer(manager, peerStore, scope).start()
+            // mDNS only when we serve (advertising a closed port would mislead peers).
+            if (serving) {
+                runCatching {
+                    NsdDiscovery(appContext).start(identity.deviceId, SYNC_PORT) { found ->
+                        val peer = peerStore.get(found.deviceId) ?: return@start
+                        scope.launch {
+                            manager.dialPeer(found.deviceId, listOf("${found.host}:${found.port}"), peer.certFingerprint)
+                        }
+                    }
+                }.onFailure { Log.w(TAG, "mDNS unavailable: ${it.message}") }
+            }
         }
     }
 
