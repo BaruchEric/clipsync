@@ -125,6 +125,11 @@ class MainActivity : ComponentActivity() {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text("clipsync", style = MaterialTheme.typography.headlineSmall)
+                val connected by AppGraph.connectedPeers.collectAsState()
+                Text(
+                    if (connected.isEmpty()) "No peers connected" else "${connected.size} peer(s) connected",
+                    style = MaterialTheme.typography.labelMedium,
+                )
 
                 key(tick) {
                     when {

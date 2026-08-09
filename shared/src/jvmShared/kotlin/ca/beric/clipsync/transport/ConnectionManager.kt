@@ -4,6 +4,8 @@ import ca.beric.clipsync.protocol.ControlMessage
 import ca.beric.clipsync.sync.RemotePeer
 import ca.beric.clipsync.sync.SyncEngine
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
@@ -33,6 +35,11 @@ class ConnectionManager(
 
     /** Device ids with an active link (inbound or outbound) — dedups links per peer. */
     private val connected = ConcurrentHashMap.newKeySet<String>()
+
+    private val _connectedPeers = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Live set of connected peer device ids, for status UI. */
+    val connectedPeers: StateFlow<Set<String>> = _connectedPeers
 
     fun startServer(port: Int, host: String = "0.0.0.0") { server?.start(port, host) }
 
@@ -85,6 +92,7 @@ class ConnectionManager(
                             else -> {
                                 peerId = message.deviceId
                                 engine.addPeer(RemotePeer(message.deviceId, key) { link.send(it) })
+                                _connectedPeers.value = connected.toSet()
                             }
                         }
                     }
@@ -92,7 +100,11 @@ class ConnectionManager(
                 }
             }
         } finally {
-            peerId?.let { connected.remove(it); engine.removePeer(it) }
+            peerId?.let {
+                connected.remove(it)
+                _connectedPeers.value = connected.toSet()
+                engine.removePeer(it)
+            }
         }
     }
 

@@ -28,6 +28,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -57,6 +59,11 @@ object AppGraph {
     @Volatile
     var myPayload: String? = null
         private set
+
+    private val _connectedPeers = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Live set of connected peer device ids, for the status UI. */
+    val connectedPeers: StateFlow<Set<String>> = _connectedPeers
 
     fun init(context: Context) {
         if (::repo.isInitialized) return
@@ -104,6 +111,7 @@ object AppGraph {
 
             startCapture(engine, clipboard)
             PeerDialer(manager, peerStore, scope).start()
+            launch { manager.connectedPeers.collect { _connectedPeers.value = it } }
             // mDNS only when we serve (advertising a closed port would mislead peers).
             if (serving) {
                 runCatching {

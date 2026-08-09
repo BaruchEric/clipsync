@@ -1,5 +1,6 @@
 package ca.beric.clipsync.desktop
 
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,7 +66,7 @@ fun main() {
     val db = ClipsyncDb(DriverFactory().createDriver())
     val repo = ClipRepository(db)
     val peerStore = PeerStore(db)
-    val (engine, identityName) = runBlocking {
+    val (engine, identityName, connectedPeers) = runBlocking {
         ClipsyncCrypto.ensureInitialized()
         val secretStore = SecretStore()
         val identity = DeviceIdentity(db, secretStore).getOrCreate("Mac")
@@ -96,7 +97,7 @@ fun main() {
         writePairingFiles(pairing, tls.fingerprint, SYNC_PORT)
         watchPeerPayload(appScope, pairing)
         println("clipsync: identity ${identity.deviceId}, TLS fp ${tls.fingerprint}, server :$SYNC_PORT")
-        engine to identity.deviceName
+        Triple(engine, identity.deviceName, manager.connectedPeers)
     }
 
     // Capture: record locally for history and hand to the engine to broadcast.
@@ -111,10 +112,12 @@ fun main() {
     application {
         var windowVisible by remember { mutableStateOf(true) }
         val icon = remember { trayIcon() }
+        val connected by connectedPeers.collectAsState()
+        val status = if (connected.isEmpty()) "no peers connected" else "${connected.size} peer(s) connected"
 
         Tray(
             icon = icon,
-            tooltip = "clipsync ($identityName)",
+            tooltip = "clipsync ($identityName) — $status",
             onAction = { windowVisible = true },
             menu = {
                 Item("Open history") { windowVisible = true }
@@ -126,7 +129,7 @@ fun main() {
         if (windowVisible) {
             Window(
                 onCloseRequest = { windowVisible = false },
-                title = "clipsync history",
+                title = "clipsync — $status",
                 state = rememberWindowState(width = 380.dp, height = 520.dp),
             ) {
                 HistoryScreen(repo)
