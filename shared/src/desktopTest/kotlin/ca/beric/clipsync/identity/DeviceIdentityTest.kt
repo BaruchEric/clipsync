@@ -9,19 +9,25 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** Exercises the real macOS Keychain (via the `security` CLI) and identity persistence. */
+/** Exercises the real macOS Keychain (via the `security` CLI) and identity persistence.
+ *  macOS-only; skipped elsewhere (CI runs on Linux where the `security` CLI is absent). */
 class DeviceIdentityTest {
 
     private val store = SecretStore()
     private val testAlias = "clipsync-test-identity-secret"
 
+    // Real Keychain; skipped off-macOS and on CI (headless keychain is unavailable).
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").lowercase().contains("mac") && System.getenv("CI") == null
+
     @AfterTest
     fun cleanup() {
-        store.delete(testAlias)
+        if (isMac()) store.delete(testAlias)
     }
 
     @Test
     fun keychainRoundTrips() {
+        if (!isMac()) return
         store.delete(testAlias)
         val secret = ByteArray(32) { (it * 7).toByte() }
         store.put(testAlias, secret)
@@ -32,6 +38,7 @@ class DeviceIdentityTest {
 
     @Test
     fun identityIsStableAcrossCalls() = runTest {
+        if (!isMac()) return@runTest
         store.delete(testAlias)
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         ClipsyncDb.Schema.create(driver)

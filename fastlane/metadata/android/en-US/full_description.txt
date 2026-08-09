@@ -1,0 +1,26 @@
+clipsync is an open-source shared clipboard: copy on one device, paste on another.
+
+It is peer-to-peer with no server, no account, and no cloud. Your devices pair directly
+and sync over your local network (and over a Tailscale tailnet). Every clipboard payload
+is end-to-end encrypted with a per-pair key before it leaves the device.
+
+Every feature is free and open source. There are no paid tiers and no paywalled features.
+
+Features:
+
+* Text and image (PNG/JPEG) clipboard sync between your own devices
+* Serverless peer-to-peer: no account, no cloud relay, no telemetry
+* End-to-end encryption (XChaCha20-Poly1305) with keys derived at pairing (X25519)
+* Devices authenticate each other by pinned TLS certificate fingerprint
+* LAN discovery over mDNS, plus direct dial of known peers across a tailnet
+* Local clipboard history
+
+Android background capture:
+
+Android blocks apps from reading the clipboard in the background. clipsync uses Shizuku
+to read and write the clipboard through a privileged shell-uid service, so sync keeps
+working while the app is in the background. You need the Shizuku app running and you grant
+clipsync access to it once. clipsync never uploads your clipboard anywhere — it only sends
+it, encrypted, to the devices you have paired.
+
+Licensed under the GNU Affero General Public License v3.0.

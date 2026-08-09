@@ -14,14 +14,19 @@ class TlsIdentityStoreTest {
     private val alias = "tls-test-${System.nanoTime()}"
     private val secretStore = SecretStore()
 
+    // Keychain-backed; skipped off-macOS and on CI (headless keychain is unavailable).
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").lowercase().contains("mac") && System.getenv("CI") == null
+
     @AfterTest
     fun cleanup() {
-        secretStore.delete(alias)
+        if (isMac()) secretStore.delete(alias)
         file.delete()
     }
 
     @Test
     fun fingerprintStableAcrossReload() {
+        if (!isMac()) return // Keychain-backed; runs on macOS (local), skipped on Linux CI
         val first = TlsIdentityStore(file, secretStore, alias).loadOrCreate("test")
         // A fresh store over the same file + password alias must load, not regenerate.
         val second = TlsIdentityStore(file, secretStore, alias).loadOrCreate("test")
@@ -31,6 +36,7 @@ class TlsIdentityStoreTest {
 
     @Test
     fun freshFileYieldsNewIdentity() {
+        if (!isMac()) return
         val a = TlsIdentityStore(file, secretStore, alias).loadOrCreate("test")
         file.delete()
         secretStore.delete(alias)

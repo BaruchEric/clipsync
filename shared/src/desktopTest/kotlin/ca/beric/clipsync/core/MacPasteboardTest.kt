@@ -9,8 +9,9 @@ import kotlin.test.assertTrue
 /** Real NSPasteboard integration — runs on macOS only (M5 CI uses a macos runner). */
 class MacPasteboardTest {
 
+    // Real macOS pasteboard + AWT; skipped off-macOS and on headless CI runners.
     private fun assumeMac(): Boolean =
-        System.getProperty("os.name").lowercase().contains("mac")
+        System.getProperty("os.name").lowercase().contains("mac") && System.getenv("CI") == null
 
     @Test
     fun changeTokenIncrementsWhenClipboardWritten() {
