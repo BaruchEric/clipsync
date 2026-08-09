@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.Context
 import android.os.IBinder
 import android.util.Log
+import java.lang.reflect.Method
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 import rikka.shizuku.SystemServiceHelper
@@ -26,7 +27,8 @@ class ShizukuClipboard(private val context: Context) {
     private val shellPackage = "com.android.shell"
 
     private val clipboardInterface: Any? by lazy { buildClipboardInterface() }
-    private val getPrimaryClipMethod by lazy { resolveGetPrimaryClip() }
+    private val getPrimaryClipMethod by lazy { resolveMethod("getPrimaryClip") }
+    private val setPrimaryClipMethod by lazy { resolveMethod("setPrimaryClip") }
 
     fun isReady(): Boolean {
         val ping = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
@@ -50,6 +52,21 @@ class ShizukuClipboard(private val context: Context) {
         }
     }
 
+    /** Writes [text] to the system clipboard via Shizuku (background writes are focus-gated too). */
+    fun setText(text: String): Boolean {
+        val iface = clipboardInterface ?: return false
+        val method = setPrimaryClipMethod ?: return false
+        return try {
+            val clip = ClipData.newPlainText("clipsync", text)
+            val args = buildSetArgs(method.parameterTypes, clip)
+            method.invoke(iface, *args)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "setPrimaryClip via Shizuku failed: ${t.javaClass.simpleName}: ${t.message}")
+            false
+        }
+    }
+
     private fun buildClipboardInterface(): Any? = try {
         val raw: IBinder = SystemServiceHelper.getSystemService("clipboard")
         val wrapped = ShizukuBinderWrapper(raw)
@@ -60,13 +77,12 @@ class ShizukuClipboard(private val context: Context) {
         null
     }
 
-    private fun resolveGetPrimaryClip(): java.lang.reflect.Method? {
+    private fun resolveMethod(name: String): Method? {
         val iface = clipboardInterface ?: return null
-        // Pick the getPrimaryClip overload whose first parameter is the calling package (String).
         return iface.javaClass.methods
-            .filter { it.name == "getPrimaryClip" }
+            .filter { it.name == name }
             .maxByOrNull { it.parameterTypes.size }
-            ?.also { Log.i(TAG, "resolved getPrimaryClip(${it.parameterTypes.joinToString { p -> p.simpleName }})") }
+            ?.also { Log.i(TAG, "resolved $name(${it.parameterTypes.joinToString { p -> p.simpleName }})") }
     }
 
     /**
@@ -77,11 +93,23 @@ class ShizukuClipboard(private val context: Context) {
      */
     private fun buildArgs(paramTypes: Array<Class<*>>): Array<Any?> {
         var stringSeen = 0
-        var intSeen = 0
         return Array(paramTypes.size) { i ->
             when (paramTypes[i]) {
                 String::class.java -> if (stringSeen++ == 0) shellPackage else null
-                Int::class.javaPrimitiveType, Integer::class.java -> { intSeen++; 0 }
+                Int::class.javaPrimitiveType, Integer::class.java -> 0
+                else -> null
+            }
+        }
+    }
+
+    /** Like [buildArgs] but injects the [clip] for the ClipData parameter of setPrimaryClip. */
+    private fun buildSetArgs(paramTypes: Array<Class<*>>, clip: ClipData): Array<Any?> {
+        var stringSeen = 0
+        return Array(paramTypes.size) { i ->
+            when {
+                paramTypes[i] == ClipData::class.java -> clip
+                paramTypes[i] == String::class.java -> if (stringSeen++ == 0) shellPackage else null
+                paramTypes[i] == Int::class.javaPrimitiveType || paramTypes[i] == Integer::class.java -> 0
                 else -> null
             }
         }
