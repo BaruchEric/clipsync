@@ -18,14 +18,16 @@ import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transport.ConnectionManager
+import ca.beric.clipsync.transport.PeerDialer
 import ca.beric.clipsync.transport.TlsIdentityStore
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -81,24 +83,38 @@ object AppGraph {
             val engine = SyncEngine(identity.deviceId, repo, AndroidClipboardApplier(clipboard))
             val manager = ConnectionManager(
                 localDeviceId = identity.deviceId,
-                tlsIdentity = null,
+                tlsIdentity = tls, // now serves too (symmetric P2P) when a cert is available
                 engine = engine,
                 perPairKeyFor = { peerStore.get(it)?.perPairKey },
                 scope = scope,
             )
+            // Netty-on-Android is the least-proven thing here: a server failure must not
+            // kill the process — the dial path still works.
+            val serving = tls != null && runCatching { manager.startServer(SYNC_PORT) }
+                .onFailure { Log.w(TAG, "server start failed: ${it.message}") }.isSuccess
             val pairing = PairingManager(identity, peerStore)
             pairingManager = pairing
             myPayload = pairing.myPayload(
                 certFingerprint = tls?.fingerprint ?: CLIENT_NO_CERT,
-                addresses = emptyList(), // the desktop dials nothing; the phone has no server yet
-                port = 0,
+                addresses = if (serving) localAddresses() else emptyList(),
+                port = if (serving) SYNC_PORT else 0,
             )
-            Log.i(TAG, "clipsync-payload $myPayload")
+            Log.i(TAG, "clipsync-payload serving=$serving $myPayload")
 
             startCapture(engine, clipboard)
-            startDialLoop(manager)
+            PeerDialer(manager, peerStore, scope).start()
         }
     }
+
+    /** Non-loopback IPv4 addresses (Wi-Fi LAN + tailnet 100.x) to advertise for dial-in. */
+    private fun localAddresses(): List<String> =
+        runCatching {
+            NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.isUp && !it.isLoopback }
+                .flatMap { it.inetAddresses.toList() }
+                .filterIsInstance<Inet4Address>()
+                .mapNotNull { it.hostAddress }
+        }.getOrDefault(emptyList())
 
     /**
      * Import a peer's pairing payload and persist it. Suspends briefly until the sync
@@ -137,22 +153,9 @@ object AppGraph {
         }
     }
 
-    private fun startDialLoop(manager: ConnectionManager) {
-        scope.launch {
-            while (isActive) {
-                for (peer in peerStore.all()) {
-                    if (manager.isDialing(peer.deviceId)) continue
-                    if (peer.addresses.isEmpty()) continue
-                    launch { manager.dialPeer(peer.deviceId, peer.addresses, peer.certFingerprint) }
-                }
-                delay(DIAL_INTERVAL_MS)
-            }
-        }
-    }
-
     @Volatile
     private var syncStarted = false
 
     private const val CLIENT_NO_CERT = "android-client-no-cert"
-    private const val DIAL_INTERVAL_MS = 3000L
+    private const val SYNC_PORT = 47653
 }

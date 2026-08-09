@@ -31,12 +31,18 @@ class ConnectionManager(
     /** Device ids with an in-flight or open outbound (dialed) link, to avoid re-dialing. */
     private val dialing = ConcurrentHashMap.newKeySet<String>()
 
+    /** Device ids with an active link (inbound or outbound) — dedups links per peer. */
+    private val connected = ConcurrentHashMap.newKeySet<String>()
+
     fun startServer(port: Int, host: String = "0.0.0.0") { server?.start(port, host) }
 
     fun stop() { server?.stop() }
 
-    /** True if an outbound dial to [deviceId] is currently in flight or connected. */
+    /** True if an outbound dial to [deviceId] is currently in flight. */
     fun isDialing(deviceId: String): Boolean = dialing.contains(deviceId)
+
+    /** True if a live link to [deviceId] exists (either direction). */
+    fun isConnected(deviceId: String): Boolean = connected.contains(deviceId)
 
     /** One-shot dial (used by tests): connect to [host]:[port] and handle in the background. */
     suspend fun dial(host: String, port: Int, fingerprint: String) {
@@ -45,20 +51,21 @@ class ConnectionManager(
     }
 
     /**
-     * Idempotent dial-and-hold for a known peer. No-ops if a link to [deviceId] is
-     * already in flight or open. Tries [endpoints] ("host:port") in order and, on the
-     * first that connects, suspends until the link closes; then frees the slot so a
-     * scheduler can re-dial. [fingerprint] is pinned against the server's certificate.
+     * Idempotent dial-and-hold for a known peer. No-ops if a dial to [deviceId] is already
+     * in flight. Tries [endpoints] ("host:port") in order; on the first that connects,
+     * suspends until the link closes and returns true. Returns false if nothing connected.
+     * [fingerprint] is pinned against the server's certificate.
      */
-    suspend fun dialPeer(deviceId: String, endpoints: List<String>, fingerprint: String) {
-        if (!dialing.add(deviceId)) return
+    suspend fun dialPeer(deviceId: String, endpoints: List<String>, fingerprint: String): Boolean {
+        if (!dialing.add(deviceId)) return false
         try {
             for (endpoint in endpoints) {
                 val (host, port) = parseEndpoint(endpoint) ?: continue
                 val link = runCatching { ClipClient.connect(host, port, fingerprint) }.getOrNull() ?: continue
                 handleLink(link) // suspends until the socket closes
-                break
+                return true
             }
+            return false
         } finally {
             dialing.remove(deviceId)
         }
@@ -72,19 +79,20 @@ class ConnectionManager(
                 when (message) {
                     is ControlMessage.Hello -> {
                         val key = perPairKeyFor(message.deviceId)
-                        if (key != null) {
-                            peerId = message.deviceId
-                            engine.addPeer(RemotePeer(message.deviceId, key) { link.send(it) })
-                        } else {
-                            // Not paired (yet): don't hold a zombie link — let the peer retry.
-                            link.close()
+                        when {
+                            key == null -> link.close() // not paired (yet): let the peer retry
+                            !connected.add(message.deviceId) -> link.close() // already linked: drop the dupe
+                            else -> {
+                                peerId = message.deviceId
+                                engine.addPeer(RemotePeer(message.deviceId, key) { link.send(it) })
+                            }
                         }
                     }
                     else -> peerId?.let { engine.onRemoteMessage(it, message) }
                 }
             }
         } finally {
-            peerId?.let { engine.removePeer(it) }
+            peerId?.let { connected.remove(it); engine.removePeer(it) }
         }
     }
 

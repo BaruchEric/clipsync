@@ -28,6 +28,7 @@ import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.sync.DesktopClipboardApplier
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transport.ConnectionManager
+import ca.beric.clipsync.transport.PeerDialer
 import ca.beric.clipsync.transport.TlsIdentityStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +79,9 @@ fun main() {
             scope = appScope,
         )
         manager.startServer(SYNC_PORT, host = "0.0.0.0")
+        // Symmetric P2P: also dial known peers (whichever side connects first wins; the
+        // manager dedups the duplicate link). Backoff keeps an offline peer cheap.
+        PeerDialer(manager, peerStore, appScope).start()
         val pairing = PairingManager(identity, peerStore)
         writePairingFiles(pairing, tls.fingerprint, SYNC_PORT)
         watchPeerPayload(appScope, pairing)
