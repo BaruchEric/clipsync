@@ -18,7 +18,8 @@ import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transport.ConnectionManager
-import ca.beric.clipsync.transport.TlsIdentity
+import ca.beric.clipsync.transport.TlsIdentityStore
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -70,10 +71,13 @@ object AppGraph {
         val clipboard = ShizukuClipboard(appContext).also { shizuku = it }
         scope.launch {
             ClipsyncCrypto.ensureInitialized()
-            val identity = DeviceIdentity(db, SecretStore(appContext))
-                .getOrCreate(Build.MODEL ?: "Android")
-            // Client-only for the sim: the phone dials the desktop and never serves,
-            // so it presents no certificate and needs no TLS identity of its own.
+            val secretStore = SecretStore(appContext)
+            val identity = DeviceIdentity(db, secretStore).getOrCreate(Build.MODEL ?: "Android")
+            // Persisted so the fingerprint is stable; the phone still dials the desktop
+            // (client-only) this build — serving is the next unit.
+            val tls = runCatching {
+                TlsIdentityStore(File(appContext.filesDir, "tls.p12"), secretStore).loadOrCreate("clipsync-android")
+            }.onFailure { Log.w(TAG, "TLS identity unavailable: ${it.message}") }.getOrNull()
             val engine = SyncEngine(identity.deviceId, repo, AndroidClipboardApplier(clipboard))
             val manager = ConnectionManager(
                 localDeviceId = identity.deviceId,
@@ -85,8 +89,8 @@ object AppGraph {
             val pairing = PairingManager(identity, peerStore)
             pairingManager = pairing
             myPayload = pairing.myPayload(
-                certFingerprint = CLIENT_NO_CERT,
-                addresses = emptyList(), // the desktop dials nothing; the phone has no server
+                certFingerprint = tls?.fingerprint ?: CLIENT_NO_CERT,
+                addresses = emptyList(), // the desktop dials nothing; the phone has no server yet
                 port = 0,
             )
             Log.i(TAG, "clipsync-payload $myPayload")

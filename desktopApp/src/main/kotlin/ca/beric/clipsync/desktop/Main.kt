@@ -28,7 +28,7 @@ import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.sync.DesktopClipboardApplier
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transport.ConnectionManager
-import ca.beric.clipsync.transport.TlsIdentity
+import ca.beric.clipsync.transport.TlsIdentityStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -65,8 +65,10 @@ fun main() {
     val peerStore = PeerStore(db)
     val (engine, identityName) = runBlocking {
         ClipsyncCrypto.ensureInitialized()
-        val identity = DeviceIdentity(db, SecretStore()).getOrCreate("Mac")
-        val tls = TlsIdentity.generate("clipsync-mac")
+        val secretStore = SecretStore()
+        val identity = DeviceIdentity(db, secretStore).getOrCreate("Mac")
+        val appSupportDir = File(System.getProperty("user.home"), "Library/Application Support/clipsync")
+        val tls = TlsIdentityStore(File(appSupportDir, "tls.p12"), secretStore).loadOrCreate("clipsync-mac")
         val engine = SyncEngine(identity.deviceId, repo, DesktopClipboardApplier())
         val manager = ConnectionManager(
             localDeviceId = identity.deviceId,
