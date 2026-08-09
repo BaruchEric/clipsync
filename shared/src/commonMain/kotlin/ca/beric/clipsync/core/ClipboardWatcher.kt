@@ -10,14 +10,16 @@ class ClipboardWatcher(
     private val source: ClipboardSource,
     private val pollIntervalMs: Long = 300,
 ) {
-    fun changes(): Flow<String> = flow {
+    /** Emits each new clipboard value. Text takes precedence; otherwise an image, if present. */
+    fun changes(): Flow<Clip> = flow {
         var lastToken = source.changeToken()
         while (currentCoroutineContext().isActive) {
             delay(pollIntervalMs)
             val token = source.changeToken()
             if (token != lastToken) {
                 lastToken = token
-                source.readText()?.let { emit(it) }
+                val text = source.readText()
+                if (text != null) emit(Clip.Text(text)) else source.readImage()?.let { emit(it) }
             }
         }
     }

@@ -27,6 +27,7 @@ import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import ca.beric.clipsync.core.Clip
 import ca.beric.clipsync.core.ClipRepository
 import ca.beric.clipsync.core.ClipboardWatcher
 import ca.beric.clipsync.core.LOCAL_DEVICE_ID
@@ -120,10 +121,18 @@ fun main() {
 
     // Capture: record locally for history and hand to the engine to broadcast.
     appScope.launch {
-        ClipboardWatcher(MacPasteboard()).changes().collect { text ->
+        ClipboardWatcher(MacPasteboard()).changes().collect { clip ->
             val now = System.currentTimeMillis()
-            repo.record(LOCAL_DEVICE_ID, text, now)
-            boot.engine.onLocalCapture(text, now)
+            when (clip) {
+                is Clip.Text -> {
+                    repo.record(LOCAL_DEVICE_ID, clip.text, now)
+                    boot.engine.onLocalCapture(clip.text, now)
+                }
+                is Clip.Image -> {
+                    repo.recordImage(LOCAL_DEVICE_ID, clip.mime, clip.bytes.size, now)
+                    boot.engine.onLocalImageCapture(clip.bytes, clip.mime, now)
+                }
+            }
         }
     }
 

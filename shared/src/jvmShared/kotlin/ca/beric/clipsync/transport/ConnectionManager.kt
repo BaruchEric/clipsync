@@ -93,6 +93,8 @@ class ConnectionManager(
     private suspend fun handleLink(link: PeerLink): Boolean {
         link.send(ControlMessage.Hello(localDeviceId))
         if (pendingReciprocalPair.get()) myPayload()?.let { link.send(ControlMessage.PairRequest(it)) }
+        // Image chunks arrive as binary frames; route them to the engine (keyed by transfer id).
+        val binaryPump = scope.launch { link.binary.collect { engine.onBinaryFrame(it) } }
         var peerId: String? = null
 
         // Registers the peer once its per-pair key is known. Either a Hello (peer already
@@ -102,7 +104,7 @@ class ConnectionManager(
             val key = perPairKeyFor(id) ?: return // unknown peer: wait (a PairRequest may follow)
             if (!connected.add(id)) { link.close(); return } // already linked: drop the duplicate
             peerId = id
-            engine.addPeer(RemotePeer(id, key) { link.send(it) })
+            engine.addPeer(RemotePeer(id, key, send = { link.send(it) }, sendChunk = { link.sendChunk(it) }))
             _connectedPeers.value = connected.toSet()
             pendingReciprocalPair.set(false)
         }
@@ -116,6 +118,7 @@ class ConnectionManager(
                 }
             }
         } finally {
+            binaryPump.cancel()
             peerId?.let {
                 connected.remove(it)
                 _connectedPeers.value = connected.toSet()

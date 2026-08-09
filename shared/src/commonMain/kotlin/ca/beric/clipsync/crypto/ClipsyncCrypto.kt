@@ -6,6 +6,7 @@ import com.ionspin.kotlin.crypto.LibsodiumInitializer
 import com.ionspin.kotlin.crypto.aead.AuthenticatedEncryptionWithAssociatedData
 import com.ionspin.kotlin.crypto.box.Box
 import com.ionspin.kotlin.crypto.generichash.GenericHash
+import com.ionspin.kotlin.crypto.hash.Hash
 import com.ionspin.kotlin.crypto.scalarmult.ScalarMultiplication
 import com.ionspin.kotlin.crypto.util.LibsodiumRandom
 
@@ -38,6 +39,12 @@ object ClipsyncCrypto {
     fun randomBytes(size: Int): ByteArray = LibsodiumRandom.buf(size).toByteArray()
 
     fun randomKey(): ByteArray = randomBytes(KEY_BYTES)
+
+    /** SHA-256, used as an image-transfer id and pre-decrypt integrity check. */
+    fun sha256(data: ByteArray): ByteArray = Hash.sha256(data.toUByteArray()).toByteArray()
+
+    fun toHex(bytes: ByteArray): String =
+        bytes.joinToString("") { ((it.toInt() and 0xFF) + 0x100).toString(16).substring(1) }
 
     // --- AEAD: sealed = nonce(24) || ciphertext || tag(16) ---
 

@@ -13,7 +13,7 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 | M4 LAN sync (transport + engine) | 🟢 **live sync working** (untagged) | Loopback TLS tests + **live Mac↔Android emulator sync, both directions, 447 ms, pinned TLS, E2E-encrypted**. mDNS: desktop half verified live, Android half unverifiable on emulator. |
 | M5 hardening | 🟢 built (untagged) | Persisted TLS identity, Android serves (symmetric), backoff dialer, status UI, CI. See DEFERRED-QUESTIONS "M5 hardening — DONE". |
 
-**46 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
+**49 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
 
 ## Live sim — how to reproduce
 1. Fresh DBs (schema changed since M2): `rm -f ~/Library/Application\ Support/clipsync/history.db*` and `adb shell run-as ca.beric.clipsync rm -f databases/clipsync.db databases/clipsync.db-journal`.
@@ -42,7 +42,7 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 - **`SyncEngine`** (`sync/`, commonMain): capture→seal→broadcast, receive→LWW→decrypt→record→apply, echo suppression, `Mutex`-guarded for the multi-coroutine (poll vs. connection) access. Records **before** applying so history attributes remote clips to the origin device, not `local`.
 - **Appliers**: desktop AWT pasteboard; Android Shizuku `setPrimaryClip`.
 - **Wiring**: desktop `Main.kt` and Android `AppGraph.startSync` build identity + engine + manager; capture flows through the shared change-gated `ClipboardWatcher` (Android via `ShizukuClipboardSource`).
-- **Still pending for a "complete" M4:** mDNS auto-discovery (JmDNS/NsdManager, `_clipsync._tcp`) — untestable on the emulator (NAT blocks multicast), needs real Wi-Fi. Image capture/apply wiring (chunk transport is tested but no platform image capture path yet).
+- **Still pending for a "complete" M4:** mDNS auto-discovery (JmDNS/NsdManager, `_clipsync._tcp`) — untestable on the emulator (NAT blocks multicast), needs real Wi-Fi. (Image sync is now wired for desktop + transport; Android image capture is the remaining piece — see below.)
 
 ### M5 — DONE (built)
 - **TLS identity persistence** ✅ `TlsIdentityStore` (PKCS12 + Keychain/Keystore); fingerprint stable across restart.
@@ -55,7 +55,7 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 ### Genuinely remaining (needs Eric / a device)
 - **QR pairing UI — BUILT; camera scan needs your phone.** Desktop renders a scannable QR + SAS; Android has a "Scan to pair" button (ZXing) + reciprocal-pairing over the wire (so the camera-less desktop gets the phone's key). Proven device-independently (reverse-channel loopback test + QR encode/decode round-trip). The literal camera scan + on-device SAS check are the only unverified links — `m3` completes there.
 - **Real-phone verification** — M2 background capture on a physical phone, M4/mDNS cross-device discovery on real Wi-Fi, and the QR camera scan (all blocked on the emulator). One device session covers all of it.
-- **Image capture/apply wiring** — chunk transport is tested end to end, but neither platform yet captures/applies images (only text is wired into the engine).
+- **Android image capture/apply** — the desktop + engine + transport image path is DONE and tested (Mac↔Mac images sync; a 200 KB image round-trips A→B over TLS; the macOS pasteboard capture/apply round-trips). Only Android remains: a clipboard image there is a `content://` URI + ContentProvider problem through Shizuku's shell-uid binder — real device work, not done (received images are dropped with a log). See DEFERRED-QUESTIONS "Image sync".
 - **LTE + Tailscale sim** — Eric's on-device step.
 
 ## Sim harness already in place

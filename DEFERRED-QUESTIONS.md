@@ -32,6 +32,14 @@ Built and (where possible) verified on the emulator:
 - **TLS server does no client-auth.** A dialing peer presents no certificate; peer identity rests entirely on the `Hello` device id + the per-pair key (a wrong key fails the AEAD open). This is fine for an E2E-encrypted app but is the kind of thing a security review will flag — documented deliberately.
 - **NsdManager uses the deprecated `resolveService`/`getHost`** (deprecated API 34+) for minSdk-29 simplicity; migrate to the callback API later.
 
+## Image sync — DONE for desktop + transport; Android pending (2026-08-08)
+
+- **What works:** images captured on the desktop sync to a peer, E2E-encrypted. Verified device-independently — a 200 KB image goes A→B byte-identical over real TLS (announce → chunks → reassemble → integrity-check → decrypt → apply) — and the real macOS pasteboard image capture+apply round-trips (both are tests). So **Mac↔Mac images work**; **Mac→Android will sync but not yet apply** (see below).
+- **Single path (spec deviation, intentional):** every image is sent as `ImageUpdate` + chunks, even a one-chunk image. The 1 MiB "inline in the control frame" cap from the spec is not implemented as a second branch — one receive path is simpler and gets exercised by every image. Chunk size 64 KiB; images over **16 MiB are rejected** (DoS bound).
+- **Transfer id / integrity:** one value — `sha256(sealed bytes)` — is both the frame id and `ImageMeta.sha256`, so the receiver verifies integrity *before* decrypting. Half-received transfers are bounded (oversize/duplicate/bad-index frames drop the transfer) and evicted when the peer disconnects.
+- **Android image capture/apply is NOT implemented.** Reading/writing a clipboard image on Android means a `content://` URI backed by a ContentProvider, and doing that through Shizuku's shell-uid binder is a separate permission problem (URI grants) — not just more code. For now Android never captures images, and an image received from a peer is dropped with a log (`applyImage ignored … not supported on Android yet`). This is the one piece of image sync that still needs real Android work; flagged so "images sync" isn't read as "images sync to the phone."
+- **Android image-capture token gap (for when it's built):** `ShizukuClipboardSource.changeToken()` hashes the text, so an image-only clipboard reads as the EMPTY sentinel and two different image copies look unchanged. Whoever builds Android image capture must fold the clip's URI/description into the token.
+
 ## Autonomous decisions (FYI — veto if wrong)
 
 - **M3 crypto lib:** ionspin libsodium verified working on JVM — kept it, no Lazysodium fallback needed.

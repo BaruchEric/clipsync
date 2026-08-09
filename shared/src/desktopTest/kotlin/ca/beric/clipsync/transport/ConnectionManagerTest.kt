@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 /** Proves the full app wiring — two ConnectionManagers over real TLS syncing a clip. */
@@ -35,7 +36,9 @@ class ConnectionManagerTest {
 
     private class RecordingApplier : ClipboardApplier {
         val applied = mutableListOf<String>()
+        val images = mutableListOf<ByteArray>()
         override fun applyText(text: String) { applied += text }
+        override fun applyImage(bytes: ByteArray, mime: String) { images += bytes }
     }
 
     private fun repo(): ClipRepository {
@@ -74,6 +77,41 @@ class ConnectionManagerTest {
             engineA.onLocalCapture("synced!", nowMs = 100)
             withTimeout(5_000) { while (applierB.applied.isEmpty()) delay(20) }
             assertEquals("synced!", applierB.applied.last())
+        }
+    }
+
+    /**
+     * A ~200 KB image captured on A reaches B byte-identical over real TLS: announce
+     * (ImageUpdate) → chunks (binary frames) → reassemble → verify → decrypt → apply,
+     * and B records an image history entry attributed to A.
+     */
+    @Test
+    fun imageSyncsOverTlsAsChunks() = runBlocking {
+        ClipsyncCrypto.ensureInitialized()
+        val idA = TlsIdentity.generate("A")
+        val ka = ClipsyncCrypto.generateKeyPair()
+        val kb = ClipsyncCrypto.generateKeyPair()
+        val keyA = ClipsyncCrypto.deriveSharedKey(ka.secretKey, ka.publicKey, kb.publicKey)
+        val keyB = ClipsyncCrypto.deriveSharedKey(kb.secretKey, kb.publicKey, ka.publicKey)
+
+        val applierB = RecordingApplier()
+        val repoB = repo()
+        val engineA = SyncEngine("A", repo(), RecordingApplier())
+        val engineB = SyncEngine("B", repoB, applierB)
+
+        a = ConnectionManager("A", idA, engineA, { if (it == "B") keyA else null }, scope)
+            .also { it.startServer(17799, host = "127.0.0.1") }
+        b = ConnectionManager("B", TlsIdentity.generate("B"), engineB, { if (it == "A") keyB else null }, scope)
+
+        val image = ByteArray(200_000) { ((it * 31) % 256).toByte() }
+        withTimeout(20_000) {
+            scope.launch { b!!.dial("127.0.0.1", 17799, idA.fingerprint) }
+            withTimeout(10_000) { while (!a!!.isConnected("B") || !b!!.isConnected("A")) delay(20) }
+            engineA.onLocalImageCapture(image, "image/png", nowMs = 100)
+            withTimeout(10_000) { while (applierB.images.isEmpty()) delay(20) }
+            assertContentEquals(image, applierB.images.last())
+            withTimeout(5_000) { while (repoB.latest()?.kind != "image") delay(20) }
+            assertEquals("A", repoB.latest()?.deviceId)
         }
     }
 

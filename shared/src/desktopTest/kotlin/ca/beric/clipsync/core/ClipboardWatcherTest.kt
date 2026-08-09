@@ -22,8 +22,8 @@ class ClipboardWatcherTest {
         source: FakeSource,
         totalMs: Long,
         script: FakeSource.(advanceTo: (Long) -> Unit) -> Unit,
-    ): List<String> {
-        val emitted = mutableListOf<String>()
+    ): List<Clip> {
+        val emitted = mutableListOf<Clip>()
         runTest {
             val watcher = ClipboardWatcher(source, pollIntervalMs = 100)
             val job = launch { watcher.changes().toList(emitted) }
@@ -48,14 +48,14 @@ class ClipboardWatcherTest {
             advanceTo(150)
             copy("hello")
         }
-        assertEquals(listOf("hello"), emitted)
+        assertEquals(listOf<Clip>(Clip.Text("hello")), emitted)
     }
 
     @Test
     fun doesNotEmitPreexistingContentOrUnchangedToken() {
         val source = FakeSource().apply { text = "already-there" }
         val emitted = runWatcher(source, totalMs = 500) { }
-        assertEquals(emptyList(), emitted)
+        assertEquals(emptyList<Clip>(), emitted)
     }
 
     @Test
@@ -67,6 +67,6 @@ class ClipboardWatcherTest {
             advanceTo(350)
             copy("text-after")
         }
-        assertEquals(listOf("text-after"), emitted)
+        assertEquals(listOf<Clip>(Clip.Text("text-after")), emitted)
     }
 }

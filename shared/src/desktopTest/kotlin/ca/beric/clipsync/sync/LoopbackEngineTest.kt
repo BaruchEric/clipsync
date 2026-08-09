@@ -37,6 +37,7 @@ class LoopbackEngineTest {
     private class RecordingApplier : ClipboardApplier {
         val applied = mutableListOf<String>()
         override fun applyText(text: String) { applied += text }
+        override fun applyImage(bytes: ByteArray, mime: String) { /* text-only test */ }
     }
 
     private fun repo(): ClipRepository {
@@ -73,8 +74,8 @@ class LoopbackEngineTest {
                 launch { clientLink.control.collect { engineB.onRemoteMessage("A", it) } },
             )
 
-            engineA.addPeer(RemotePeer("B", keyA) { serverLink.send(it) })
-            engineB.addPeer(RemotePeer("A", keyB) { clientLink.send(it) })
+            engineA.addPeer(RemotePeer("B", keyA, send = { serverLink.send(it) }))
+            engineB.addPeer(RemotePeer("A", keyB, send = { clientLink.send(it) }))
 
             // A copies → B should apply it
             engineA.onLocalCapture("hello from A", nowMs = 100)

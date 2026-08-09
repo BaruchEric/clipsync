@@ -6,6 +6,7 @@ import android.util.Log
 import ca.beric.clipsync.android.capture.AndroidClipboardApplier
 import ca.beric.clipsync.android.capture.ShizukuClipboard
 import ca.beric.clipsync.android.capture.ShizukuClipboardSource
+import ca.beric.clipsync.core.Clip
 import ca.beric.clipsync.core.ClipRepository
 import ca.beric.clipsync.core.ClipboardWatcher
 import ca.beric.clipsync.core.LOCAL_DEVICE_ID
@@ -182,10 +183,17 @@ object AppGraph {
         scope.launch {
             ClipboardWatcher(ShizukuClipboardSource(clipboard), pollIntervalMs = 500)
                 .changes()
-                .collect { text ->
+                .collect { clip ->
                     val now = System.currentTimeMillis()
-                    repo.record(LOCAL_DEVICE_ID, text, now)
-                    engine.onLocalCapture(text, now)
+                    when (clip) {
+                        is Clip.Text -> {
+                            repo.record(LOCAL_DEVICE_ID, clip.text, now)
+                            engine.onLocalCapture(clip.text, now)
+                        }
+                        // Android clipboard image capture (content:// URIs via Shizuku) is not
+                        // implemented yet; images received from a peer are handled by the applier.
+                        is Clip.Image -> Unit
+                    }
                 }
         }
     }

@@ -26,6 +26,18 @@ class ClipRepository(
             true
         }
 
+    /** Records an image event as a history summary (the bytes live on the clipboard, not the DB). */
+    suspend fun recordImage(deviceId: String, mime: String, sizeBytes: Int, nowMs: Long): Boolean =
+        withContext(writeContext) {
+            val summary = "image: $mime (${sizeBytes / 1024} KB)"
+            if (latest()?.content == summary) return@withContext false // echo / duplicate
+            queries.transaction {
+                queries.insert(deviceId, "image", summary, nowMs)
+                queries.trimToCap(cap.toLong())
+            }
+            true
+        }
+
     fun observeHistory(): Flow<List<ClipEntry>> =
         queries.selectAll(::ClipEntry).asFlow().mapToList(writeContext)
 
