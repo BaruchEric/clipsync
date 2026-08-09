@@ -69,8 +69,9 @@ class ConnectionManager(
             for (endpoint in endpoints) {
                 val (host, port) = parseEndpoint(endpoint) ?: continue
                 val link = runCatching { ClipClient.connect(host, port, fingerprint) }.getOrNull() ?: continue
-                handleLink(link) // suspends until the socket closes
-                return true
+                // Report whether a peer actually registered (Hello accepted), NOT merely that
+                // the socket opened — else an unknown-peer/glare close would reset the backoff.
+                return runCatching { handleLink(link) }.getOrDefault(false)
             }
             return false
         } finally {
@@ -78,7 +79,8 @@ class ConnectionManager(
         }
     }
 
-    private suspend fun handleLink(link: PeerLink) {
+    /** Returns true if a peer was registered on this link (a valid Hello was accepted). */
+    private suspend fun handleLink(link: PeerLink): Boolean {
         link.send(ControlMessage.Hello(localDeviceId))
         var peerId: String? = null
         try {
@@ -106,6 +108,7 @@ class ConnectionManager(
                 engine.removePeer(it)
             }
         }
+        return peerId != null
     }
 
     private fun parseEndpoint(endpoint: String): Pair<String, Int>? {

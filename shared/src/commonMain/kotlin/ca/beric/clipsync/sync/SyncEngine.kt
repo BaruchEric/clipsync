@@ -54,9 +54,6 @@ class SyncEngine(
         Unit
     }
 
-    /** Number of currently-connected peers (for status UI / tests). */
-    suspend fun peerCount(): Int = mutex.withLock { peers.size }
-
     /** Called when this device captures a new local clipboard value. */
     suspend fun onLocalCapture(text: String, nowMs: Long) {
         val version: ClipVersion
