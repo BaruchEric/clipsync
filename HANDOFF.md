@@ -1,6 +1,6 @@
-# clipsync — Build Handoff (2026-08-08)
+# clipsync — Build Handoff (2026-08-12)
 
-State after Phase 0 → M4 live sync. Everything below is green; the transport is wired into both apps and demonstrated end to end.
+State after Phase 0 → M6 file transfer. Everything below is green; the transport is wired into both apps and demonstrated end to end.
 
 ## Done & verified
 
@@ -12,8 +12,75 @@ State after Phase 0 → M4 live sync. Everything below is green; the transport i
 | M3 crypto + pairing + identity | 🟢 **camera-scan gate met on real hardware** (untagged — tag `m3` when Eric confirms) | XChaCha20-Poly1305 vector, X25519+SAS, real Keychain round-trip; **live QR camera pairing Mac↔SM-S921U, SAS 773702 matching on both screens**. See "On-device pairing run" below. |
 | M4 LAN sync (transport + engine) | 🟢 **live sync working** (untagged) | Loopback TLS tests + **live Mac↔Android emulator sync, both directions, 447 ms, pinned TLS, E2E-encrypted**. mDNS: desktop half verified live, Android half unverifiable on emulator. |
 | M5 hardening | 🟢 built (untagged) | Persisted TLS identity, Android serves (symmetric), backoff dialer, status UI, CI. See DEFERRED-QUESTIONS "M5 hardening — DONE". |
+| M6 file transfer | 🟢 **live Mac↔emulator, both directions** (untagged) | Streamed E2E-encrypted files over the paired TLS link; sha256-identical either way on the Android 16 emulator. See "M6 emulator run" below. Real-phone confirmation pending (S24 unreachable that session). |
 
-**49 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
+**61 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
+
+## M6 file transfer (2026-08-12) — built + emulator-verified
+
+Triggered by Eric: "implement" the LinkMyMac/LinkMyDroid pair (the $22.99 Android⇄Mac app from
+Samuel Nam's video). Parity analysis + roadmap: `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`;
+design: `docs/superpowers/plans/2026-08-12-m6-file-transfer.md`. Files was the clear next
+milestone (the video's "AirDrop — done" beat); notifications (M7) and messages (M8) are
+spec'd as candidates but **not** built — each needs a permission-surface sign-off first.
+
+What exists now:
+
+- **Shared engine** (`transfer/FileTransferEngine`, jvmShared): streamed transfers over the
+  existing links — 256 KiB chunks sealed per-chunk (AAD = transfer id ‖ index), disk-backed
+  receive through a `FileSink` seam, whole-file sha256 verified before publish, windowed acks
+  (≤4 MiB in flight), 15 s offer timeout / 60 s stall watchdog, ≤4 GiB, name sanitization
+  (a malicious paired peer cannot path-traverse). New control messages FileOffer/FileAck/
+  FileError are additive — an old peer silently drops them and the sender times out with a
+  "peer up to date?" failure, no crash.
+- **Desktop**: drop files on the window or "Send a file…" (native dialog); receives to
+  `~/Downloads/clipsync`; live transfer rows in the window. Also: Parallels `vnic*`/`bridge*`
+  interfaces are now **excluded** from advertised addresses and tailnet CGNAT addresses sort
+  last (closes the dead-endpoint reconnect latency flagged in the 2026-08-08 run — the live
+  payload now advertises `["192.168.1.32","100.72.29.68"]`, no Parallels 10.x).
+- **Android**: share-sheet target (`ACTION_SEND`/`SEND_MULTIPLE`, any mime) streams straight
+  from the content Uri (exact size required; unknown-length streams skipped with a log);
+  receives into MediaStore `Download/clipsync` (IS_PENDING until integrity passes) + a
+  tap-to-open notification; transfer rows on the main screen. **Sends wait up to 10 s for a
+  peer link** — a share usually cold-starts the process, and the unwaited send lost the race
+  against the dialer every time (caught live in the emulator run below).
+- **Harness hooks** (peer-payload.txt idiom): desktop polls `~/.clipsync/send-file.txt` (write
+  an absolute path → sends it, logs `send-file start path=… size=…`); Android accepts
+  `--es send_file_path <app-readable path>` (logs `clipsyncShare: send-from-intent … ok=…`).
+
+### M6 emulator run (2026-08-12) — VERIFIED
+
+Desktop app ran against an **isolated home** (`JAVA_TOOL_OPTIONS=-Duser.home=<tmp>`), so
+Eric's real DB/identity/pairings were untouched; emulator `clipsync-a16`, app data cleared.
+Paired via payload exchange (Mac ← logcat payload via peer-payload.txt, via=file; Android ←
+intent extra with addresses rewritten `["10.0.2.2"]`, via=local; **SAS 364696 in both logs**).
+Then, over the real pinned-TLS link:
+
+- **Mac→Android**: 700,000-byte random file via the send-file.txt hook → landed as
+  `/sdcard/Download/clipsync/testfile-mac-to-android.bin`, **sha256 identical**
+  (`8008085c…2ee661`), `clipsync-files` notification channel live.
+- **Android→Mac**: 650,000-byte random file via the send_file_path hook → landed in
+  `~/Downloads/clipsync/up.bin` (isolated home), **sha256 identical** (`bbf0213a…33ede4`),
+  ~4 s after a cold start (includes the wait-for-peer fix doing its job).
+
+Notes: the first Android→Mac attempt failed `ok=false` — that failure is what produced the
+wait-for-peer fix, then passed on retry. Also learned: `am start` extras are **dropped** when
+the same activity is already top (`Intent.filterEquals` ignores extras) — harness runs must
+`am force-stop` first, exactly as `pairing-test.sh run` already does.
+
+### Real-S24 session (blocked on Eric — bundle with the standing M2/mDNS items)
+
+The phone was unreachable this session (no adb transport: wireless debugging off or off-LAN;
+tailnet dark — no ping, 8022/5555 closed). When you're back on it:
+
+1. Phone on the LAN → Settings → Developer options → **Wireless debugging ON** (or just USB).
+2. `~/.claude/skills/android-device/scripts/adb-wifi.sh connect` (re-pair only if it asks).
+3. `adb -s <serial> install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk`
+   (pairing survives; no reset needed).
+4. Mac side: relaunch the rebuilt `desktopApp/build/compose/binaries/main/app/clipsync.app`.
+5. Share any photo from the phone to clipsync → should appear in `~/Downloads/clipsync`.
+   Drop a file on the clipsync window → phone notification, file in `Download/clipsync`.
+   (Headless equivalents: the two harness hooks above.)
 
 ## On-device pairing run (2026-08-08) — VERIFIED
 

@@ -1,6 +1,7 @@
 # clipsync
 
-Open-source, cross-platform **shared clipboard**. Copy on one device, paste on another.
+Open-source, cross-platform **shared clipboard and file drop**. Copy on one device, paste
+on another; share a file from the phone and it lands on the Mac (and vice versa).
 Serverless peer-to-peer over your LAN (and your Tailscale tailnet), end-to-end encrypted,
 with **no accounts, no cloud, and no paywalled features — ever.**
 
@@ -27,6 +28,11 @@ an upsell.
   *before* they touch the socket. Long-term secrets live in the macOS Keychain / Android Keystore.
 - **Sync model.** Last-write-wins on `(deviceId, monotonicCounter, wallClockMs)`. Local history
   is capped at 100 entries. Text and PNG/JPEG images (large images are chunked).
+- **File transfer.** Any file streams between paired devices over the same encrypted link:
+  256 KiB chunks, each sealed with the per-pair key (AAD binds chunk to transfer + position),
+  whole-file SHA-256 verified before the file is published. Desktop: drag-and-drop onto the
+  clipsync window or "Send a file…", received files in `~/Downloads/clipsync`. Android: share
+  to clipsync from any app; received files in `Download/clipsync` with a notification.
 
 ## Android background capture
 
@@ -76,7 +82,10 @@ works as a headless fallback. `scripts/pairing-test.sh` drives and asserts the w
 M1 (scaffold + macOS watcher) and M2 (Android background capture via Shizuku) are complete.
 M3 (crypto + pairing) and M4 (LAN sync: TLS transport, sync engine, mDNS) are implemented and
 proven with a live Mac↔Android sync. M5 hardening (persisted TLS identity, symmetric serving,
-backoff, status UI, CI) is in progress. See `docs/superpowers/specs/` and `HANDOFF.md`.
+backoff, status UI, CI) is built. M6 (file transfer) is implemented and verified live
+Mac↔Android-emulator in both directions; real-phone confirmation pending. The wider roadmap
+(vs. LinkMyMac/LinkMyDroid: notifications, messages) is in
+`docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 
 ## License
 

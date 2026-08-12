@@ -7,6 +7,8 @@ Decisions I made without you are logged here with my reasoning, so you can veto 
 
 - **M2 real-hardware confirmation.** Emulator proves background capture works via Shizuku on Android 16. Confirm on your actual phone when convenient (install clipsync + Shizuku, start Shizuku, background clipsync, copy in another app → should appear in history).
 - **M4 real-Wi-Fi confirmation (bundle with the above).** Live sync is proven Mac↔emulator over TLS, but the emulator's user-mode NAT **cannot** carry mDNS multicast — so discovery could only be exercised by direct-dial to `10.0.2.2`. mDNS auto-discovery needs your physical phone + Mac on the same Wi-Fi. Same device session as the M2 check.
+- **M6 real-hardware confirmation (same session again).** File transfer is emulator-proven both directions; the S24 was unreachable on 2026-08-12 (wireless debugging off, tailnet dark). Steps in HANDOFF "Real-S24 session".
+- **M7/M8 scope sign-off.** The LinkMyMac parity roadmap proposes notifications (NotificationListenerService + RemoteInput) then SMS as the next milestones — both change the permission surface materially, so neither gets built without your explicit go. Veto/reorder in `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`.
 
 ## M4 live sync — DONE (2026-08-08)
 
@@ -39,6 +41,19 @@ Built and (where possible) verified on the emulator:
 - **Transfer id / integrity:** one value — `sha256(sealed bytes)` — is both the frame id and `ImageMeta.sha256`, so the receiver verifies integrity *before* decrypting. Half-received transfers are bounded (oversize/duplicate/bad-index frames drop the transfer) and evicted when the peer disconnects.
 - **Android image capture/apply is NOT implemented.** Reading/writing a clipboard image on Android means a `content://` URI backed by a ContentProvider, and doing that through Shizuku's shell-uid binder is a separate permission problem (URI grants) — not just more code. For now Android never captures images, and an image received from a peer is dropped with a log (`applyImage ignored … not supported on Android yet`). This is the one piece of image sync that still needs real Android work; flagged so "images sync" isn't read as "images sync to the phone."
 - **Android image-capture token gap (for when it's built):** `ShizukuClipboardSource.changeToken()` hashes the text, so an image-only clipboard reads as the EMPTY sentinel and two different image copies look unchanged. Whoever builds Android image capture must fold the clip's URI/description into the token.
+
+## M6 file transfer — DONE, emulator-verified (2026-08-12)
+
+Decisions made without you (rationale in the plan doc; veto any):
+
+- **Files went ahead of notifications/messages.** The MVP spec listed files as a non-goal, but your "implement LinkMyMac" instruction re-opened scope, and files is that product's headline beat, reuses the transport, and adds zero Android permissions. Notifications/SMS wait for your sign-off (permission surface).
+- **Auto-accept from paired peers** (the LocalSend-adjacent call): pairing is the consent boundary; there is no receive-side prompt in v1. Bounds: ≤4 GiB, ≤4 concurrent inbound, sanitized names, IS_PENDING/temp-file until the sha256 verifies. Add an accept prompt later if this feels too permissive.
+- **Send targets all connected peers** (your setup is 1 phone + 1 Mac); a peer picker is a later nicety.
+- **Per-chunk AEAD instead of the image path's whole-blob seal** — files must stream (GB-scale); the image path is untouched. AAD binds transfer id + chunk index, so chunks can't be spliced across transfers or reordered.
+- **Exact-size offers only:** Android share sources without a resolvable size (rare) are skipped with a log, because the offer carries the chunk count up front. Revisit with a chunked-EOF protocol if it ever bites.
+- **Share-sheet URI grant caveat:** a huge send relies on the content-Uri read grant staying valid while the transfer runs; if the user swipes the task away mid-GB-transfer, the stream can die (transfer fails cleanly, receiver discards). Copy-to-cache-first was rejected (doubles I/O and disk for the common case).
+- **Harness hooks are product code:** `~/.clipsync/send-file.txt` (desktop) and `--es send_file_path` (Android) mirror the peer-payload.txt bootstrap so on-device runs stay assertable. They only read files the app could already read.
+- **Emulator peer hygiene:** the emulator run used an isolated desktop home (`-Duser.home`), so no test peer rows or files touched your real desktop state.
 
 ## Autonomous decisions (FYI — veto if wrong)
 
