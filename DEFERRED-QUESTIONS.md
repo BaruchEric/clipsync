@@ -5,7 +5,7 @@ Decisions I made without you are logged here with my reasoning, so you can veto 
 
 ## Open questions (need your input eventually)
 
-- **M2 real-hardware confirmation — one tap left.** Shizuku is now RUNNING on the S24 (started over adb 2026-08-12; restart after reboot). Open clipsync → "Grant clipsync access via Shizuku" → Allow, then copy anything in another app → it should appear in history and on the Mac.
+- **M2 real-hardware confirmation — nearly closed (2026-08-12 16:12).** Shizuku granted; the phone's first Shizuku clipboard read captured and synced to the Mac, and a Mac copy landed on the phone (both DBs agree, correct attribution). Last sliver: a copy from another app while clipsync is **backgrounded** / after Doze — normal daily use settles it. Restart Shizuku after each reboot (HANDOFF has the adb one-liner).
 - **M4 real-Wi-Fi confirmation (bundle with the above).** Live sync is proven Mac↔emulator over TLS, but the emulator's user-mode NAT **cannot** carry mDNS multicast — so discovery could only be exercised by direct-dial to `10.0.2.2`. mDNS auto-discovery needs your physical phone + Mac on the same Wi-Fi. Same device session as the M2 check.
 - ~~M6 real-hardware confirmation~~ — **DONE 2026-08-12**: verified Mac↔SM-S921U both directions on the real LAN, sha256-identical, including the cold-start share path. See HANDOFF "M6 real-S24 run". Tag `m6` when you're satisfied.
 - **M7/M8 scope sign-off.** The LinkMyMac parity roadmap proposes notifications (NotificationListenerService + RemoteInput) then SMS as the next milestones — both change the permission surface materially, so neither gets built without your explicit go. Veto/reorder in `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`.

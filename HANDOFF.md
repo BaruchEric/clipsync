@@ -96,9 +96,29 @@ URI (`-d clipsync://send/N`) to force delivery.
 Also done in that session: **Shizuku server started on the S24 over adb** (the app's
 `start.sh` isn't visible to shell under scoped storage on Android 16 — exec the starter lib
 directly: `pm path moe.shizuku.privileged.api` → `…/lib/arm64/libshizuku.so`; survives until
-reboot). clipsync's fg service runs; **capture still needs Eric's one tap** — the "Grant
-clipsync access via Shizuku" card → Allow. After that, the standing M2 confirmation is just:
-copy anything in any app → history + Mac.
+reboot).
+
+### Live clipboard on real hardware (2026-08-12 16:12) — VERIFIED
+
+Eric granted Shizuku (16:12:32) and re-scanned the Mac's QR. Both history DBs (metadata
+checked from both sides) tell the same story:
+
+- **Phone→Mac**: the phone's first Shizuku clipboard read captured a `local` text row at
+  16:12:32; the Mac's DB has the same clip at 16:12:32 attributed to `633db2f59f4d9afa`
+  (the S24) — Shizuku read → capture → seal → TLS → applied on the Mac.
+- **Mac→phone**: Eric's 16:13:12 Mac copy appears on the phone attributed to
+  `614186691d70d0e1`. Mac-copied **images** are recorded on the phone (16:03, 16:06) but not
+  applied — Android image apply is the known open item, working as documented.
+- **Re-scan refreshed the phone's stored endpoints** to the clean list
+  (`[192.168.1.32:47653, 100.72.29.68:47653]`, Parallels gone), SAS 773702 matching the
+  original pairing (key continuity). Observed edge, harmless here: with the link already up,
+  the armed reciprocal `PairRequest` isn't sent until the *next* new link — so a re-scan
+  refreshes the *scanner's* stored endpoints immediately but the peer's only at reconnect
+  (the documented `pendingReciprocalPair` single-flag design).
+
+Still open on M2, deliberately: the strict gate is a copy from another app with clipsync
+**backgrounded** (and surviving Doze). Normal phone use will prove it in the field — if
+copies keep appearing on the Mac today, it's closed.
 
 ## On-device pairing run (2026-08-08) — VERIFIED
 
