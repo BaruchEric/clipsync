@@ -82,8 +82,8 @@ works as a headless fallback. `scripts/pairing-test.sh` drives and asserts the w
 M1 (scaffold + macOS watcher) and M2 (Android background capture via Shizuku) are complete.
 M3 (crypto + pairing) and M4 (LAN sync: TLS transport, sync engine, mDNS) are implemented and
 proven with a live Mac↔Android sync. M5 hardening (persisted TLS identity, symmetric serving,
-backoff, status UI, CI) is built. M6 (file transfer) is implemented and verified live
-Mac↔Android-emulator in both directions; real-phone confirmation pending. The wider roadmap
+backoff, status UI, CI) is built. M6 (file transfer) is implemented and verified live on
+real hardware (Mac↔SM-S921U over the LAN, both directions). The wider roadmap
 (vs. LinkMyMac/LinkMyDroid: notifications, messages) is in
 `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 

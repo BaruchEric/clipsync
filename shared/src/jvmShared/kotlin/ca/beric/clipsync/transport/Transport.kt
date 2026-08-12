@@ -129,6 +129,10 @@ object ClipClient {
                     .sslSocketFactory(sslContext.socketFactory, trustManager)
                     // Self-signed cert CN won't match the IP; we authenticate by pinned fingerprint.
                     .hostnameVerifier { _, _ -> true }
+                    // Stored peer rows can carry dead endpoints (e.g. VM-bridge addresses from an
+                    // old pairing) that are dialed before the live one; OkHttp's default 10 s per
+                    // dead endpoint made reconnects visibly slow on hardware. 3 s caps the damage.
+                    .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
             }
         }

@@ -12,7 +12,7 @@ State after Phase 0 → M6 file transfer. Everything below is green; the transpo
 | M3 crypto + pairing + identity | 🟢 **camera-scan gate met on real hardware** (untagged — tag `m3` when Eric confirms) | XChaCha20-Poly1305 vector, X25519+SAS, real Keychain round-trip; **live QR camera pairing Mac↔SM-S921U, SAS 773702 matching on both screens**. See "On-device pairing run" below. |
 | M4 LAN sync (transport + engine) | 🟢 **live sync working** (untagged) | Loopback TLS tests + **live Mac↔Android emulator sync, both directions, 447 ms, pinned TLS, E2E-encrypted**. mDNS: desktop half verified live, Android half unverifiable on emulator. |
 | M5 hardening | 🟢 built (untagged) | Persisted TLS identity, Android serves (symmetric), backoff dialer, status UI, CI. See DEFERRED-QUESTIONS "M5 hardening — DONE". |
-| M6 file transfer | 🟢 **live Mac↔emulator, both directions** (untagged) | Streamed E2E-encrypted files over the paired TLS link; sha256-identical either way on the Android 16 emulator. See "M6 emulator run" below. Real-phone confirmation pending (S24 unreachable that session). |
+| M6 file transfer | ✅ **VERIFIED on real hardware, both directions** (untagged — tag `m6` when Eric confirms) | Streamed E2E-encrypted files over the paired TLS link, Mac↔SM-S921U on the LAN, sha256-identical each way, incl. the cold-start share path. See "M6 real-S24 run" below. |
 
 **61 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
 
@@ -68,19 +68,37 @@ wait-for-peer fix, then passed on retry. Also learned: `am start` extras are **d
 the same activity is already top (`Intent.filterEquals` ignores extras) — harness runs must
 `am force-stop` first, exactly as `pairing-test.sh run` already does.
 
-### Real-S24 session (blocked on Eric — bundle with the standing M2/mDNS items)
+### M6 real-S24 run (2026-08-12, later that day) — VERIFIED
 
-The phone was unreachable this session (no adb transport: wireless debugging off or off-LAN;
-tailnet dark — no ping, 8022/5555 closed). When you're back on it:
+Eric enabled wireless debugging; `adb-wifi.sh connect` found the phone at a fresh port
+(192.168.1.45:45129, key trust intact). New APK installed over the old one (pairing
+survived — the 2026-08-08 peer rows carried straight through), real desktop app relaunched
+on the new build (identity `614186691d70d0e1`, same as the original pairing). All over the
+real LAN, real pinned TLS, link auto-established (mDNS vs. stored-endpoint dial not
+instrumented — attribution still open):
 
-1. Phone on the LAN → Settings → Developer options → **Wireless debugging ON** (or just USB).
-2. `~/.claude/skills/android-device/scripts/adb-wifi.sh connect` (re-pair only if it asks).
-3. `adb -s <serial> install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk`
-   (pairing survives; no reset needed).
-4. Mac side: relaunch the rebuilt `desktopApp/build/compose/binaries/main/app/clipsync.app`.
-5. Share any photo from the phone to clipsync → should appear in `~/Downloads/clipsync`.
-   Drop a file on the clipsync window → phone notification, file in `Download/clipsync`.
-   (Headless equivalents: the two harness hooks above.)
+- **Mac→S24**: 1.5 MB via the send-file.txt hook → `/sdcard/Download/clipsync/`, ~4 s,
+  **sha256 identical** (`99bc79b7…87301a`).
+- **S24→Mac** (link up): 1.2 MB via the send_file_path hook → `~/Downloads/clipsync/`, ~2 s,
+  **sha256 identical** (`8ab66684…43f946`).
+- **S24→Mac, cold-start worst case** (force-stop → start-with-send): first attempt FAILED —
+  the phone's stored peer row still lists the Mac's two dead Parallels endpoints *first*
+  (from the 2026-08-08 pairing; the desktop filter only fixes newly generated payloads), and
+  each burned OkHttp's default 10 s connect timeout, blowing the 10 s peer wait. Fixed with a
+  **3 s dial connectTimeout** (Transport) + **20 s share wait** (AppGraph); re-ran the same
+  worst case: **arrived ~8 s after cold start**, sha256 identical. Root cause + the real fix
+  (refresh stored endpoints on contact) logged in DEFERRED-QUESTIONS.
+
+Harness gotcha, twice-earned: `am start` **drops extras** when the same activity is already
+top (`Intent.filterEquals` ignores extras) — either `am force-stop` first or vary the data
+URI (`-d clipsync://send/N`) to force delivery.
+
+Also done in that session: **Shizuku server started on the S24 over adb** (the app's
+`start.sh` isn't visible to shell under scoped storage on Android 16 — exec the starter lib
+directly: `pm path moe.shizuku.privileged.api` → `…/lib/arm64/libshizuku.so`; survives until
+reboot). clipsync's fg service runs; **capture still needs Eric's one tap** — the "Grant
+clipsync access via Shizuku" card → Allow. After that, the standing M2 confirmation is just:
+copy anything in any app → history + Mac.
 
 ## On-device pairing run (2026-08-08) — VERIFIED
 

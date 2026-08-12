@@ -5,9 +5,9 @@ Decisions I made without you are logged here with my reasoning, so you can veto 
 
 ## Open questions (need your input eventually)
 
-- **M2 real-hardware confirmation.** Emulator proves background capture works via Shizuku on Android 16. Confirm on your actual phone when convenient (install clipsync + Shizuku, start Shizuku, background clipsync, copy in another app → should appear in history).
+- **M2 real-hardware confirmation — one tap left.** Shizuku is now RUNNING on the S24 (started over adb 2026-08-12; restart after reboot). Open clipsync → "Grant clipsync access via Shizuku" → Allow, then copy anything in another app → it should appear in history and on the Mac.
 - **M4 real-Wi-Fi confirmation (bundle with the above).** Live sync is proven Mac↔emulator over TLS, but the emulator's user-mode NAT **cannot** carry mDNS multicast — so discovery could only be exercised by direct-dial to `10.0.2.2`. mDNS auto-discovery needs your physical phone + Mac on the same Wi-Fi. Same device session as the M2 check.
-- **M6 real-hardware confirmation (same session again).** File transfer is emulator-proven both directions; the S24 was unreachable on 2026-08-12 (wireless debugging off, tailnet dark). Steps in HANDOFF "Real-S24 session".
+- ~~M6 real-hardware confirmation~~ — **DONE 2026-08-12**: verified Mac↔SM-S921U both directions on the real LAN, sha256-identical, including the cold-start share path. See HANDOFF "M6 real-S24 run". Tag `m6` when you're satisfied.
 - **M7/M8 scope sign-off.** The LinkMyMac parity roadmap proposes notifications (NotificationListenerService + RemoteInput) then SMS as the next milestones — both change the permission surface materially, so neither gets built without your explicit go. Veto/reorder in `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`.
 
 ## M4 live sync — DONE (2026-08-08)
@@ -53,6 +53,7 @@ Decisions made without you (rationale in the plan doc; veto any):
 - **Exact-size offers only:** Android share sources without a resolvable size (rare) are skipped with a log, because the offer carries the chunk count up front. Revisit with a chunked-EOF protocol if it ever bites.
 - **Share-sheet URI grant caveat:** a huge send relies on the content-Uri read grant staying valid while the transfer runs; if the user swipes the task away mid-GB-transfer, the stream can die (transfer fails cleanly, receiver discards). Copy-to-cache-first was rejected (doubles I/O and disk for the common case).
 - **Harness hooks are product code:** `~/.clipsync/send-file.txt` (desktop) and `--es send_file_path` (Android) mirror the peer-payload.txt bootstrap so on-device runs stay assertable. They only read files the app could already read.
+- **Stored peer endpoints go stale — root cause found on the S24 (2026-08-12).** The phone's peer row still carries the Mac's 2026-08-08 address list with the two dead Parallels endpoints *first*; the desktop-side filter only fixes newly generated payloads. Each dead endpoint burned OkHttp's default 10 s connect timeout, so post-cold-start reconnects exceeded the share wait. Mitigated now (3 s dial timeout + 20 s share wait); the real fix is refreshing a peer's stored addresses whenever a link is established (the Hello could carry the current list) or on re-pair. Re-pairing the phone also clears it today.
 - **Emulator peer hygiene:** the emulator run used an isolated desktop home (`-Duser.home`), so no test peer rows or files touched your real desktop state.
 
 ## Autonomous decisions (FYI — veto if wrong)

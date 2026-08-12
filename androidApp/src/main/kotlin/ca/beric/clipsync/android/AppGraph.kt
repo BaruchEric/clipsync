@@ -268,9 +268,11 @@ object AppGraph {
     /**
      * A share often cold-starts the process (share-sheet → activity → startSync), so the
      * dialer may still be connecting when the send is requested. Waiting here turns
-     * "first share after a while always fails" into a short pause.
+     * "first share after a while always fails" into a short pause. 20 s covers a stored
+     * peer row whose stale endpoints each burn the 3 s dial timeout before the live one
+     * (observed on the S24: reconnect took >10 s until the dial timeout was capped).
      */
-    private suspend fun awaitPeerConnected(timeoutMs: Long = 10_000) {
+    private suspend fun awaitPeerConnected(timeoutMs: Long = 20_000) {
         withTimeoutOrNull(timeoutMs) { connectedPeers.first { it.isNotEmpty() } }
             ?: Log.w(TAG, "no peer connected after ${timeoutMs}ms; sending anyway (will no-op)")
     }
