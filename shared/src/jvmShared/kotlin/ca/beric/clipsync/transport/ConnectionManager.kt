@@ -3,6 +3,7 @@ package ca.beric.clipsync.transport
 import ca.beric.clipsync.protocol.ControlMessage
 import ca.beric.clipsync.sync.RemotePeer
 import ca.beric.clipsync.sync.SyncEngine
+import ca.beric.clipsync.transfer.FileTransferEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +33,8 @@ class ConnectionManager(
     private val myPayload: () -> String? = { null },
     /** Persists a peer from a received payload and returns its device id (or null to reject). */
     private val pairingSink: ((payloadJson: String) -> String?)? = null,
+    /** When set, peers are also registered here and file messages/chunks are routed to it. */
+    private val fileEngine: FileTransferEngine? = null,
 ) {
     /** Set after a QR scan so the next outbound link offers our payload back to the scanned peer. */
     private val pendingReciprocalPair = AtomicBoolean(false)
@@ -93,8 +96,14 @@ class ConnectionManager(
     private suspend fun handleLink(link: PeerLink): Boolean {
         link.send(ControlMessage.Hello(localDeviceId))
         if (pendingReciprocalPair.get()) myPayload()?.let { link.send(ControlMessage.PairRequest(it)) }
-        // Image chunks arrive as binary frames; route them to the engine (keyed by transfer id).
-        val binaryPump = scope.launch { link.binary.collect { engine.onBinaryFrame(it) } }
+        // Image and file chunks arrive as binary frames; each engine claims frames by its own
+        // transfer ids and ignores the rest, so routing to both is safe.
+        val binaryPump = scope.launch {
+            link.binary.collect {
+                engine.onBinaryFrame(it)
+                fileEngine?.onBinaryFrame(it)
+            }
+        }
         var peerId: String? = null
 
         // Registers the peer once its per-pair key is known. Either a Hello (peer already
@@ -104,7 +113,9 @@ class ConnectionManager(
             val key = perPairKeyFor(id) ?: return // unknown peer: wait (a PairRequest may follow)
             if (!connected.add(id)) { link.close(); return } // already linked: drop the duplicate
             peerId = id
-            engine.addPeer(RemotePeer(id, key, send = { link.send(it) }, sendChunk = { link.sendChunk(it) }))
+            val remote = RemotePeer(id, key, send = { link.send(it) }, sendChunk = { link.sendChunk(it) })
+            engine.addPeer(remote)
+            fileEngine?.addPeer(remote)
             _connectedPeers.value = connected.toSet()
             pendingReciprocalPair.set(false)
         }
@@ -114,6 +125,8 @@ class ConnectionManager(
                 when (message) {
                     is ControlMessage.Hello -> register(message.deviceId)
                     is ControlMessage.PairRequest -> pairingSink?.invoke(message.payload)?.let { register(it) }
+                    is ControlMessage.FileOffer, is ControlMessage.FileAck, is ControlMessage.FileError ->
+                        peerId?.let { fileEngine?.onRemoteMessage(it, message) }
                     else -> peerId?.let { engine.onRemoteMessage(it, message) }
                 }
             }
@@ -123,6 +136,7 @@ class ConnectionManager(
                 connected.remove(it)
                 _connectedPeers.value = connected.toSet()
                 engine.removePeer(it)
+                fileEngine?.removePeer(it)
             }
         }
         return peerId != null

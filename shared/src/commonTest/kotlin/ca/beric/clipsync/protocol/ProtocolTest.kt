@@ -44,6 +44,27 @@ class ProtocolTest {
     }
 
     @Test
+    fun fileMessagesRoundTrip() {
+        val offer = ControlMessage.FileOffer(
+            id = "ab".repeat(32), name = "song.mp3", size = 4_567_890,
+            mime = "audio/mpeg", sha256 = "cd".repeat(32), chunkCount = 18,
+        )
+        assertEquals(offer, ControlCodec.decode(ControlCodec.encode(offer)))
+
+        val ack = ControlMessage.FileAck(id = "ab".repeat(32), received = 8)
+        assertEquals(ack, ControlCodec.decode(ControlCodec.encode(ack)))
+
+        val err = ControlMessage.FileError(id = "ab".repeat(32), reason = "receiver busy")
+        assertEquals(err, ControlCodec.decode(ControlCodec.encode(err)))
+    }
+
+    @Test
+    fun unknownMessageTypeDecodesToNull() {
+        // An older peer decoding a future message type must drop it, not crash.
+        assertNull(ControlCodec.decode("""{"t":"file-resume","id":"x"}"""))
+    }
+
+    @Test
     fun chunkFrameRoundTrips() {
         val sha = ByteArray(32) { (it + 1).toByte() }
         val payload = ByteArray(500) { (it % 256).toByte() }

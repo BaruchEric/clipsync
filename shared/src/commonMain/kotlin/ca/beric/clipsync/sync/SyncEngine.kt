@@ -138,7 +138,9 @@ class SyncEngine(
         when (message) {
             is ControlMessage.ClipUpdate -> applyRemoteClip(fromDeviceId, message)
             is ControlMessage.ImageUpdate -> beginImageTransfer(fromDeviceId, message)
-            is ControlMessage.Hello, is ControlMessage.PairRequest -> Unit // handled by the transport
+            is ControlMessage.Hello, is ControlMessage.PairRequest,
+            is ControlMessage.FileOffer, is ControlMessage.FileAck, is ControlMessage.FileError,
+            -> Unit // handled by the transport / FileTransferEngine
         }
     }
 

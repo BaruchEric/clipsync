@@ -74,6 +74,43 @@ sealed interface ControlMessage {
         @SerialName("meta") val meta: ImageMeta,
         @SerialName("chunks") val chunkCount: Int,
     ) : ControlMessage
+
+    /**
+     * Offers a file transfer. [id] (random, hex) keys the binary [ChunkFrame]s that follow;
+     * [sha256] is the plaintext file hash the receiver verifies before publishing. Chunks are
+     * sent only after the receiver's accepting [FileAck] (received = 0), and unlike images are
+     * sealed per chunk (AAD = id ‖ index) so neither side ever holds the whole file in memory.
+     */
+    @Serializable
+    @SerialName("file")
+    data class FileOffer(
+        @SerialName("id") val id: String,
+        @SerialName("name") val name: String,
+        @SerialName("size") val size: Long,
+        @SerialName("mime") val mime: String,
+        @SerialName("sha256") val sha256: String,
+        @SerialName("chunks") val chunkCount: Int,
+    ) : ControlMessage
+
+    /**
+     * Receiver → sender progress for one transfer: [received] chunks so far. 0 accepts the
+     * offer and starts the stream; reaching the offer's chunkCount confirms completion. The
+     * sender keeps a bounded window of unacked chunks, so acks are also flow control.
+     */
+    @Serializable
+    @SerialName("file-ack")
+    data class FileAck(
+        @SerialName("id") val id: String,
+        @SerialName("n") val received: Int,
+    ) : ControlMessage
+
+    /** Either side aborts a transfer; the receiver discards any partially written data. */
+    @Serializable
+    @SerialName("file-err")
+    data class FileError(
+        @SerialName("id") val id: String,
+        @SerialName("reason") val reason: String,
+    ) : ControlMessage
 }
 
 /** Serializes control messages to/from JSON text frames. */
