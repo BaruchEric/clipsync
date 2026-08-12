@@ -4,13 +4,17 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +47,10 @@ import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.DesktopClipboardApplier
 import ca.beric.clipsync.sync.SyncEngine
+import ca.beric.clipsync.transfer.FileSource
+import ca.beric.clipsync.transfer.FileTransferEngine
+import ca.beric.clipsync.transfer.FolderFileSink
+import ca.beric.clipsync.transfer.TransferState
 import ca.beric.clipsync.transport.ConnectionManager
 import ca.beric.clipsync.transport.PeerDialer
 import ca.beric.clipsync.transport.TlsIdentityStore
@@ -53,9 +61,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.swing.Swing
+import java.awt.FileDialog
+import java.awt.datatransfer.DataFlavor
+import java.awt.dnd.DnDConstants
+import java.awt.dnd.DropTarget
+import java.awt.dnd.DropTargetAdapter
+import java.awt.dnd.DropTargetDropEvent
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.nio.file.Files
 
 private const val SYNC_PORT = 47653
 
@@ -66,13 +82,24 @@ private fun trayIcon(): BitmapPainter {
     return BitmapPainter(bitmap)
 }
 
-/** Non-loopback IPv4 addresses (LAN + tailnet 100.x) to advertise as dial hints. */
+/**
+ * Non-loopback IPv4 addresses (LAN + tailnet 100.x) to advertise as dial hints. VM bridges
+ * (Parallels "vnic"/"bridge" interfaces) are excluded: their dead-end 10.x addresses were
+ * advertised ahead of the real LAN address, and every dead endpoint ahead of a live one costs
+ * a full dial attempt on each reconnect (HANDOFF 2026-08-08). Tailnet CGNAT addresses sort
+ * last so the LAN path is tried first when both are present.
+ */
 private fun localAddresses(): List<String> =
     NetworkInterface.getNetworkInterfaces().toList()
         .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+        .filterNot {
+            it.name.startsWith("vnic") || it.name.startsWith("bridge") ||
+                runCatching { it.displayName ?: "" }.getOrDefault("").contains("Parallels", ignoreCase = true)
+        }
         .flatMap { it.inetAddresses.toList() }
         .filterIsInstance<Inet4Address>()
         .mapNotNull { it.hostAddress }
+        .sortedBy { if (it.startsWith("100.")) 1 else 0 }
 
 fun main() {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -90,6 +117,11 @@ fun main() {
         val pairing = PairingManager(identity, peerStore)
         val myPayload = pairing.myPayload(tls.fingerprint, localAddresses(), SYNC_PORT)
         val engine = SyncEngine(identity.deviceId, repo, DesktopClipboardApplier())
+        // Received files land in ~/Downloads/clipsync; sends stream from wherever they are.
+        val fileEngine = FileTransferEngine(
+            appScope,
+            FolderFileSink(File(System.getProperty("user.home"), "Downloads/clipsync")),
+        )
         val manager = ConnectionManager(
             localDeviceId = identity.deviceId,
             tlsIdentity = tls,
@@ -107,6 +139,7 @@ fun main() {
                     peer.deviceId
                 }
             },
+            fileEngine = fileEngine,
         )
         manager.startServer(SYNC_PORT, host = "0.0.0.0")
         // Symmetric P2P: also dial known peers (whichever side connects first wins; the
@@ -125,7 +158,7 @@ fun main() {
         File(File(System.getProperty("user.home"), ".clipsync").apply { mkdirs() }, "my-payload.txt").writeText(myPayload)
         watchPeerPayload(appScope, pairing)
         println("clipsync: identity ${identity.deviceId}, TLS fp ${tls.fingerprint}, server :$SYNC_PORT")
-        Boot(engine, identity.deviceName, manager.connectedPeers, myPayload)
+        Boot(engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload)
     }
 
     // Capture: record locally for history and hand to the engine to broadcast.
@@ -166,9 +199,38 @@ fun main() {
             Window(
                 onCloseRequest = { windowVisible = false },
                 title = "clipsync — $status",
-                state = rememberWindowState(width = 420.dp, height = 680.dp),
+                state = rememberWindowState(width = 420.dp, height = 720.dp),
             ) {
-                DesktopScreen(repo, boot.myPayload, peerStore, connected)
+                // AirDrop moment: any file dropped on the window streams to connected peers.
+                DisposableEffect(Unit) {
+                    val dropWindow = window
+                    DropTarget(
+                        dropWindow,
+                        object : DropTargetAdapter() {
+                            override fun drop(event: DropTargetDropEvent) {
+                                event.acceptDrop(DnDConstants.ACTION_COPY)
+                                val dropped = runCatching {
+                                    (event.transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>)
+                                        .orEmpty().filterIsInstance<File>()
+                                }.getOrDefault(emptyList())
+                                event.dropComplete(true)
+                                dropped.forEach { f -> appScope.launch { sendLocalFile(boot.fileEngine, f) } }
+                            }
+                        },
+                    )
+                    onDispose { dropWindow.dropTarget = null }
+                }
+                val pickAndSend = {
+                    // Native macOS open dialog; Swing dispatcher because AWT dialogs are modal.
+                    appScope.launch(Dispatchers.Swing) {
+                        val dialog = FileDialog(window, "Send to paired devices", FileDialog.LOAD)
+                        dialog.isMultipleMode = true
+                        dialog.isVisible = true
+                        dialog.files.orEmpty().forEach { f -> appScope.launch { sendLocalFile(boot.fileEngine, f) } }
+                    }
+                    Unit
+                }
+                DesktopScreen(repo, boot.myPayload, peerStore, connected, boot.fileEngine, pickAndSend)
             }
         }
     }
@@ -176,18 +238,29 @@ fun main() {
 
 private class Boot(
     val engine: SyncEngine,
+    val fileEngine: FileTransferEngine,
     val deviceName: String,
     val connectedPeers: StateFlow<Set<String>>,
     val myPayload: String,
 )
 
-/** Window content: pairing QR + short-auth-string list, above the clipboard history. */
+/** Streams [file] to every connected peer; logs instead of throwing (UI shows the state). */
+private suspend fun sendLocalFile(fileEngine: FileTransferEngine, file: File) {
+    if (!file.isFile) return
+    val mime = runCatching { Files.probeContentType(file.toPath()) }.getOrNull() ?: "application/octet-stream"
+    val source = FileSource(file.name, file.length(), mime) { file.inputStream() }
+    if (!fileEngine.sendFile(source)) println("clipsync: file send skipped — no peers connected")
+}
+
+/** Window content: pairing QR + SAS list, file sending/transfers, then clipboard history. */
 @Composable
 private fun DesktopScreen(
     repo: ClipRepository,
     myPayload: String,
     peerStore: PeerStore,
     connected: Set<String>,
+    fileEngine: FileTransferEngine,
+    onPickFiles: () -> Unit,
 ) {
     MaterialTheme {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -212,9 +285,39 @@ private fun DesktopScreen(
                 }
             }
             HorizontalDivider()
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Button(onClick = onPickFiles, enabled = connected.isNotEmpty()) { Text("Send a file…") }
+                Text(
+                    "  or drop files on this window · received files: ~/Downloads/clipsync",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            val transfers by fileEngine.transfers.collectAsState()
+            if (transfers.isNotEmpty()) {
+                transfers.take(4).forEach { t -> TransferRow(t) }
+                HorizontalDivider()
+            }
             Box(Modifier.weight(1f)) { HistoryScreen(repo) }
         }
     }
+}
+
+@Composable
+private fun TransferRow(t: TransferState) {
+    val direction = if (t.outbound) "→ ${t.peerDeviceId.take(8)}" else "← ${t.peerDeviceId.take(8)}"
+    val detail = when (t.status) {
+        TransferState.Status.ACTIVE -> "${formatBytes(t.transferredBytes)} / ${formatBytes(t.sizeBytes)}"
+        TransferState.Status.DONE -> if (t.outbound) "sent" else t.detail ?: "received"
+        TransferState.Status.FAILED -> "failed: ${t.detail}"
+    }
+    Text("$direction  ${t.name} — $detail", style = MaterialTheme.typography.labelSmall, maxLines = 2)
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1 shl 30 -> "%.1f GB".format(bytes / (1 shl 30).toDouble())
+    bytes >= 1 shl 20 -> "%.1f MB".format(bytes / (1 shl 20).toDouble())
+    bytes >= 1 shl 10 -> "%.0f KB".format(bytes / (1 shl 10).toDouble())
+    else -> "$bytes B"
 }
 
 /** Polls ~/.clipsync/peer-payload.txt and pairs whenever its contents change. */
