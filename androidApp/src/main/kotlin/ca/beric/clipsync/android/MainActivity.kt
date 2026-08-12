@@ -9,6 +9,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -79,6 +80,7 @@ class MainActivity : ComponentActivity() {
         SyncForegroundService.start(this)
         runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
         handlePairingIntent(intent)
+        handleShareIntent(intent)
         setContent { Screen() }
     }
 
@@ -86,6 +88,34 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handlePairingIntent(intent)
+        handleShareIntent(intent)
+    }
+
+    /** Share-sheet entry: stream the shared content to connected peers ("send to my Mac"). */
+    private fun handleShareIntent(intent: Intent?) {
+        @Suppress("DEPRECATION") // typed accessors need core 1.10+; the raw ones work everywhere
+        val uris: List<Uri> = when (intent?.action) {
+            Intent.ACTION_SEND -> listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE ->
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+            else -> emptyList()
+        }
+        if (uris.isEmpty()) return
+        intent?.action = null // consumed: don't re-send on a configuration-change redelivery
+        Toast.makeText(this, "clipsync: sending ${uris.size} file(s)…", Toast.LENGTH_SHORT).show()
+        val appContext = applicationContext
+        AppGraph.scope.launch {
+            val sent = AppGraph.sendSharedFiles(appContext, uris)
+            if (sent == 0) {
+                launch(kotlinx.coroutines.Dispatchers.Main) {
+                    Toast.makeText(
+                        appContext,
+                        "clipsync: nothing sent — is a paired device connected?",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
     }
 
     /**
@@ -156,6 +186,22 @@ class MainActivity : ComponentActivity() {
 
                 Button(onClick = { launchScan() }, modifier = Modifier.fillMaxWidth()) {
                     Text("Scan a device's QR to pair")
+                }
+
+                val transfers by AppGraph.transfers.collectAsState()
+                if (transfers.isNotEmpty()) {
+                    Text("File transfers", style = MaterialTheme.typography.labelSmall)
+                    transfers.take(3).forEach { t ->
+                        val arrow = if (t.outbound) "→" else "←"
+                        val detail = when (t.status) {
+                            ca.beric.clipsync.transfer.TransferState.Status.ACTIVE ->
+                                "${t.transferredBytes / 1024} / ${t.sizeBytes / 1024} KB"
+                            ca.beric.clipsync.transfer.TransferState.Status.DONE ->
+                                if (t.outbound) "sent" else t.detail ?: "received"
+                            ca.beric.clipsync.transfer.TransferState.Status.FAILED -> "failed: ${t.detail}"
+                        }
+                        Text("$arrow ${t.name} — $detail", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
 
                 val peers = remember(connected, tick) { AppGraph.peerStore.all() }

@@ -1,11 +1,20 @@
 package ca.beric.clipsync.android
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.util.Log
 import ca.beric.clipsync.android.capture.AndroidClipboardApplier
 import ca.beric.clipsync.android.capture.ShizukuClipboard
 import ca.beric.clipsync.android.capture.ShizukuClipboardSource
+import ca.beric.clipsync.android.transfer.MediaStoreFileSink
 import ca.beric.clipsync.core.Clip
 import ca.beric.clipsync.core.ClipRepository
 import ca.beric.clipsync.core.ClipboardWatcher
@@ -20,10 +29,14 @@ import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.SyncEngine
+import ca.beric.clipsync.transfer.FileSource
+import ca.beric.clipsync.transfer.FileTransferEngine
+import ca.beric.clipsync.transfer.TransferState
 import ca.beric.clipsync.transport.ConnectionManager
 import ca.beric.clipsync.transport.PeerDialer
 import ca.beric.clipsync.transport.TlsIdentityStore
 import java.io.File
+import java.io.IOException
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import kotlinx.coroutines.CoroutineScope
@@ -70,6 +83,14 @@ object AppGraph {
     /** Live set of connected peer device ids, for the status UI. */
     val connectedPeers: StateFlow<Set<String>> = _connectedPeers
 
+    @Volatile
+    private var fileEngine: FileTransferEngine? = null
+
+    private val _transfers = MutableStateFlow<List<TransferState>>(emptyList())
+
+    /** Recent file transfers (both directions), for the status UI. */
+    val transfers: StateFlow<List<TransferState>> = _transfers
+
     fun init(context: Context) {
         if (::repo.isInitialized) return
         db = ClipsyncDb(DriverFactory(context.applicationContext).createDriver())
@@ -94,6 +115,10 @@ object AppGraph {
                 TlsIdentityStore(File(appContext.filesDir, "tls.p12"), secretStore).loadOrCreate("clipsync-android")
             }.onFailure { Log.w(TAG, "TLS identity unavailable: ${it.message}") }.getOrNull()
             val engine = SyncEngine(identity.deviceId, repo, AndroidClipboardApplier(clipboard))
+            val files = FileTransferEngine(scope, MediaStoreFileSink(appContext))
+            files.onFileReceived = { name, _ -> notifyFileReceived(appContext, name) }
+            fileEngine = files
+            launch { files.transfers.collect { _transfers.value = it } }
             val pairing = PairingManager(identity, peerStore)
             pairingManager = pairing
             val manager = ConnectionManager(
@@ -112,6 +137,7 @@ object AppGraph {
                         peer.deviceId
                     }
                 },
+                fileEngine = files,
             )
             connectionManager = manager
             // Netty-on-Android is the least-proven thing here: a server failure must not
@@ -189,6 +215,86 @@ object AppGraph {
         return ok
     }
 
+    /**
+     * Streams share-sheet content to connected peers, sequentially (progress stays legible).
+     * Returns how many files started sending — 0 means no peers or nothing usable. Waits
+     * briefly for [startSync] to finish, mirroring [pair].
+     */
+    suspend fun sendSharedFiles(context: Context, uris: List<Uri>): Int {
+        var engine = fileEngine
+        var waited = 0
+        while (engine == null && waited < 100) {
+            delay(50)
+            engine = fileEngine
+            waited++
+        }
+        val files = engine ?: run {
+            Log.w(TAG, "sendSharedFiles gave up waiting for sync init")
+            return 0
+        }
+        val resolver = context.applicationContext.contentResolver
+        var sent = 0
+        for (uri in uris) {
+            val source = runCatching { sourceFor(resolver, uri) }.getOrNull()
+            if (source == null) {
+                Log.w(TAG, "share: cannot resolve $uri (no size/name)")
+                continue
+            }
+            if (files.sendFile(source)) sent++ else Log.w(TAG, "share: no peers connected")
+        }
+        return sent
+    }
+
+    /** Resolves a content Uri's display name, exact size, and mime into a streamable source. */
+    private fun sourceFor(resolver: android.content.ContentResolver, uri: Uri): FileSource? {
+        var name = uri.lastPathSegment ?: "file"
+        var size = -1L
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+            ?.use { c ->
+                if (c.moveToFirst()) {
+                    c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }
+                        ?.let { i -> if (!c.isNull(i)) name = c.getString(i) }
+                    c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }
+                        ?.let { i -> if (!c.isNull(i)) size = c.getLong(i) }
+                }
+            }
+        if (size < 0) {
+            size = runCatching {
+                resolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+            }.getOrDefault(-1L)
+        }
+        // The offer carries an exact size/chunk count, so a stream of unknown length can't be sent.
+        if (size < 0) return null
+        val mime = resolver.getType(uri) ?: "application/octet-stream"
+        return FileSource(name, size, mime) {
+            resolver.openInputStream(uri) ?: throw IOException("cannot open $uri")
+        }
+    }
+
+    private fun notifyFileReceived(context: Context, name: String) {
+        runCatching {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(FILE_CHANNEL_ID, "Received files", NotificationManager.IMPORTANCE_DEFAULT),
+            )
+            val openDownloads = PendingIntent.getActivity(
+                context, 0,
+                Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE,
+            )
+            manager.notify(
+                name.hashCode(),
+                Notification.Builder(context, FILE_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setContentTitle("Received $name")
+                    .setContentText("Saved to Download/clipsync")
+                    .setContentIntent(openDownloads)
+                    .setAutoCancel(true)
+                    .build(),
+            )
+        }.onFailure { Log.w(TAG, "file-received notification failed: ${it.message}") }
+    }
+
     private fun startCapture(engine: SyncEngine, clipboard: ShizukuClipboard) {
         scope.launch {
             ClipboardWatcher(ShizukuClipboardSource(clipboard), pollIntervalMs = 500)
@@ -212,4 +318,5 @@ object AppGraph {
 
     private const val CLIENT_NO_CERT = "android-client-no-cert"
     private const val SYNC_PORT = 47653
+    private const val FILE_CHANNEL_ID = "clipsync-files"
 }
