@@ -94,6 +94,9 @@ class ConnectionManager(
      * [fingerprint] is pinned against the server's certificate.
      */
     suspend fun dialPeer(deviceId: String, endpoints: List<String>, fingerprint: String): Boolean {
+        // Already linked: a fresh dial would only open a throwaway connection the duplicate
+        // check closes again (observed as connect/close churn on every mDNS re-resolve).
+        if (connected.contains(deviceId)) return false
         if (!dialing.add(deviceId)) return false
         try {
             for (endpoint in endpoints) {

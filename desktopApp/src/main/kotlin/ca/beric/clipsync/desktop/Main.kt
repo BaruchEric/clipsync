@@ -156,6 +156,7 @@ fun main() {
         runCatching {
             JmDnsDiscovery().start(identity.deviceId, SYNC_PORT) { found ->
                 val peer = peerStore.get(found.deviceId) ?: return@start
+                if (manager.isConnected(found.deviceId)) return@start // JmDNS re-resolves periodically
                 // Logged so an on-device run can attribute a connect to mDNS vs. the dialer.
                 println("clipsync: mDNS discovered ${found.deviceId} at ${found.host}:${found.port}; dialing")
                 appScope.launch {

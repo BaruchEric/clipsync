@@ -117,7 +117,12 @@ object AppGraph {
             val tls = runCatching {
                 TlsIdentityStore(File(appContext.filesDir, "tls.p12"), secretStore).loadOrCreate("clipsync-android")
             }.onFailure { Log.w(TAG, "TLS identity unavailable: ${it.message}") }.getOrNull()
-            val engine = SyncEngine(identity.deviceId, repo, AndroidClipboardApplier(clipboard))
+            val engine = SyncEngine(
+                identity.deviceId, repo,
+                AndroidClipboardApplier(clipboard, MediaStoreFileSink(appContext)) { name ->
+                    notifyFileReceived(appContext, name)
+                },
+            )
             val files = FileTransferEngine(scope, MediaStoreFileSink(appContext))
             files.onFileReceived = { name, _ -> notifyFileReceived(appContext, name) }
             fileEngine = files
@@ -171,6 +176,7 @@ object AppGraph {
                 runCatching {
                     NsdDiscovery(appContext).start(identity.deviceId, SYNC_PORT) { found ->
                         val peer = peerStore.get(found.deviceId) ?: return@start
+                        if (manager.isConnected(found.deviceId)) return@start // resolver can re-fire
                         // Logged so an on-device run can attribute a connect to mDNS vs. the dialer.
                         Log.i(TAG, "mDNS discovered ${found.deviceId} at ${found.host}:${found.port}; dialing")
                         scope.launch {
@@ -265,6 +271,18 @@ object AppGraph {
         return sent
     }
 
+    /** Harness hook: put [uriString] on the system clipboard as an image clip (via Shizuku). */
+    suspend fun setImageClip(uriString: String): Boolean {
+        var s = shizuku
+        var waited = 0
+        while (s == null && waited < 100) {
+            delay(50)
+            s = shizuku
+            waited++
+        }
+        return s?.setImageUri(Uri.parse(uriString)) ?: false
+    }
+
     /** Harness twin of [sendSharedFiles]: streams an app-readable filesystem path to peers. */
     suspend fun sendLocalFile(path: String): Boolean {
         var engine = fileEngine
@@ -354,9 +372,10 @@ object AppGraph {
                         // Record locally only for a genuine capture (engine returns false on echo).
                         is Clip.Text ->
                             if (engine.onLocalCapture(clip.text, now)) repo.record(LOCAL_DEVICE_ID, clip.text, now)
-                        // Android clipboard image capture (content:// URIs via Shizuku) is not
-                        // implemented yet; images received from a peer are handled by the applier.
-                        is Clip.Image -> Unit
+                        is Clip.Image ->
+                            if (engine.onLocalImageCapture(clip.bytes, clip.mime, now)) {
+                                repo.recordImage(LOCAL_DEVICE_ID, clip.mime, clip.bytes.size, now)
+                            }
                     }
                 }
         }

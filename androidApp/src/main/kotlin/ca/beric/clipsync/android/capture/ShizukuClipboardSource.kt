@@ -16,12 +16,15 @@ class ShizukuClipboardSource(private val shizuku: ShizukuClipboard) : ClipboardS
 
     override fun changeToken(): Long {
         if (!shizuku.isReady()) return NOT_READY
-        val text = shizuku.readText() ?: return EMPTY
-        // length in the high bits, hash in the low bits — collisions on real text are negligible.
-        return (text.length.toLong() shl 32) xor (text.hashCode().toLong() and 0xFFFFFFFFL)
+        // Text clips hash their content; URI (image) clips hash the URI — an image-only
+        // clipboard used to collapse to the EMPTY sentinel and image copies went unseen.
+        return shizuku.clipSignature() ?: EMPTY
     }
 
     override fun readText(): String? = shizuku.readText()
+
+    override fun readImage(): ca.beric.clipsync.core.Clip.Image? =
+        shizuku.readImage()?.let { (bytes, mime) -> ca.beric.clipsync.core.Clip.Image(bytes, mime) }
 
     private companion object {
         const val NOT_READY = Long.MIN_VALUE

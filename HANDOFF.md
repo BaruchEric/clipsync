@@ -224,7 +224,18 @@ To reproduce: `./scripts/pairing-test.sh preflight` → `reset` → `run` → sc
 ### Genuinely remaining (needs Eric / a device)
 - ~~QR pairing UI camera scan~~ — **DONE on a real phone.** See "On-device pairing run" above.
 - **Real-phone verification** — still open: M2 background capture on a physical phone (needs Shizuku *started*, not just installed), M4/mDNS cross-device discovery on real Wi-Fi, and the phone→Mac clipboard direction. The LAN dial path is also still unexercised: the phone reached the Mac over the **tailnet** first, so LAN/mDNS remains unproven.
-- **Android image capture/apply** — the desktop + engine + transport image path is DONE and tested (Mac↔Mac images sync; a 200 KB image round-trips A→B over TLS; the macOS pasteboard capture/apply round-trips). Only Android remains: a clipboard image there is a `content://` URI + ContentProvider problem through Shizuku's shell-uid binder — real device work, not done (received images are dropped with a log). See DEFERRED-QUESTIONS "Image sync".
+- ~~Android image capture/apply~~ — **DONE 2026-08-12, verified live on the S24 both
+  directions.** Capture: the change token now hashes a URI clip's URI (an image-only
+  clipboard used to collapse to the EMPTY sentinel), bytes are read via this app's resolver
+  or, failing that, a SHELL-uid `content read` through Shizuku, and only accepted if they
+  sniff as PNG/JPEG. Live: a URI clip set on the phone landed on the Mac pasteboard in ~3 s
+  («class PNGf» in `clipboard info`, history row attributed to the S24). Apply: a clipboard
+  image received from a peer saves to `Download/clipsync` with a notification (the
+  LinkMyMac-style behavior) — putting it on the Android clipboard proper is still out, since
+  a shell-uid `setPrimaryClip` can't make the URI read grant flow to whichever app pastes.
+  Caveats: a Gallery "copy photo" by hand is the remaining human confirmation (same clip
+  shape as the verified vehicle); provider URIs that even shell can't read are dropped with
+  a log.
 - **LTE + Tailscale sim** — Eric's on-device step.
 
 ## Harnesses already in place

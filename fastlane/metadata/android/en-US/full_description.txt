@@ -9,6 +9,7 @@ Every feature is free and open source. There are no paid tiers and no paywalled 
 Features:
 
 * Text and image (PNG/JPEG) clipboard sync between your own devices
+  (an image copied on the computer arrives on the phone in Download/clipsync)
 * File transfer: share any file to your paired computer from the Android share sheet;
   files sent from the computer land in Download/clipsync
 * Serverless peer-to-peer: no account, no cloud relay, no telemetry

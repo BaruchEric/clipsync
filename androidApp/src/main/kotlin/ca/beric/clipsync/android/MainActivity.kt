@@ -98,10 +98,17 @@ class MainActivity : ComponentActivity() {
      *   adb shell am start -n ca.beric.clipsync/.MainActivity --es send_file_path <app-readable path>
      */
     private fun handleSendPathIntent(intent: Intent?) {
-        val path = intent?.getStringExtra("send_file_path") ?: return
-        AppGraph.scope.launch {
-            val ok = AppGraph.sendLocalFile(path)
-            Log.i("clipsyncShare", "send-from-intent path=$path ok=$ok")
+        intent?.getStringExtra("send_file_path")?.let { path ->
+            AppGraph.scope.launch {
+                val ok = AppGraph.sendLocalFile(path)
+                Log.i("clipsyncShare", "send-from-intent path=$path ok=$ok")
+            }
+        }
+        intent?.getStringExtra("set_image_clip_uri")?.let { uri ->
+            AppGraph.scope.launch {
+                val ok = AppGraph.setImageClip(uri)
+                Log.i("clipsyncShare", "set-image-clip uri=$uri ok=$ok")
+            }
         }
     }
 
