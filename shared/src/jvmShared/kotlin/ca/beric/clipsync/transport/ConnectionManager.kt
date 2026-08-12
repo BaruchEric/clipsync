@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Manages TLS connections to paired peers and wires each one into the [engine].
@@ -35,12 +34,30 @@ class ConnectionManager(
     private val pairingSink: ((payloadJson: String) -> String?)? = null,
     /** When set, peers are also registered here and file messages/chunks are routed to it. */
     private val fileEngine: FileTransferEngine? = null,
+    /** This device's current dial endpoints ("host:port"), carried in every Hello it sends. */
+    private val myEndpoints: () -> List<String> = { emptyList() },
+    /** Persists a registered peer's refreshed endpoints (from its Hello), so addresses can't rot. */
+    private val endpointSink: ((deviceId: String, endpoints: List<String>) -> Unit)? = null,
 ) {
-    /** Set after a QR scan so the next outbound link offers our payload back to the scanned peer. */
-    private val pendingReciprocalPair = AtomicBoolean(false)
+    /** Peers (by device id) owed our payload after a QR scan, so the camera-less side pairs too. */
+    private val pendingReciprocal = ConcurrentHashMap.newKeySet<String>()
 
-    /** Call after scanning a peer's QR: the next link to any peer sends our payload once. */
-    fun offerReciprocalPairing() = pendingReciprocalPair.set(true)
+    /** Live links by registered peer id, for messages outside the engines (reciprocal pairing). */
+    private val links = ConcurrentHashMap<String, PeerLink>()
+
+    /**
+     * Call after scanning [peerDeviceId]'s QR: sends our payload back over the existing link
+     * right away (a re-scan of an already-connected peer refreshes it immediately), or arms
+     * it for when that peer's Hello arrives on the next link.
+     */
+    fun offerReciprocalPairing(peerDeviceId: String) {
+        val link = links[peerDeviceId]
+        if (link != null) {
+            scope.launch { myPayload()?.let { link.send(ControlMessage.PairRequest(it)) } }
+        } else {
+            pendingReciprocal.add(peerDeviceId)
+        }
+    }
     private val server = tlsIdentity?.let { id -> ClipServer(id) { link -> handleLink(link) } }
 
     /** Device ids with an in-flight or open outbound (dialed) link, to avoid re-dialing. */
@@ -94,8 +111,7 @@ class ConnectionManager(
 
     /** Returns true if a peer was registered on this link (a valid Hello / pairing was accepted). */
     private suspend fun handleLink(link: PeerLink): Boolean {
-        link.send(ControlMessage.Hello(localDeviceId))
-        if (pendingReciprocalPair.get()) myPayload()?.let { link.send(ControlMessage.PairRequest(it)) }
+        link.send(ControlMessage.Hello(localDeviceId, endpoints = myEndpoints()))
         // Image and file chunks arrive as binary frames; each engine claims frames by its own
         // transfer ids and ignores the rest, so routing to both is safe.
         val binaryPump = scope.launch {
@@ -116,14 +132,22 @@ class ConnectionManager(
             val remote = RemotePeer(id, key, send = { link.send(it) }, sendChunk = { link.sendChunk(it) })
             engine.addPeer(remote)
             fileEngine?.addPeer(remote)
+            links[id] = link
             _connectedPeers.value = connected.toSet()
-            pendingReciprocalPair.set(false)
+            if (pendingReciprocal.remove(id)) myPayload()?.let { link.send(ControlMessage.PairRequest(it)) }
         }
 
         try {
             link.control.collect { message ->
                 when (message) {
-                    is ControlMessage.Hello -> register(message.deviceId)
+                    is ControlMessage.Hello -> {
+                        register(message.deviceId)
+                        // Refresh stored addresses only for a peer that actually registered
+                        // (we hold its per-pair key); see the Hello doc for the trust caveat.
+                        if (peerId == message.deviceId && message.endpoints.isNotEmpty()) {
+                            endpointSink?.invoke(message.deviceId, message.endpoints)
+                        }
+                    }
                     is ControlMessage.PairRequest -> pairingSink?.invoke(message.payload)?.let { register(it) }
                     is ControlMessage.FileOffer, is ControlMessage.FileAck, is ControlMessage.FileError ->
                         peerId?.let { fileEngine?.onRemoteMessage(it, message) }
@@ -134,6 +158,7 @@ class ConnectionManager(
             binaryPump.cancel()
             peerId?.let {
                 connected.remove(it)
+                links.remove(it)
                 _connectedPeers.value = connected.toSet()
                 engine.removePeer(it)
                 fileEngine?.removePeer(it)

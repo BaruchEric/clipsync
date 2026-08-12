@@ -31,12 +31,21 @@ data class ImageMeta(
 @Serializable
 sealed interface ControlMessage {
 
-    /** First message after connect: identifies the sender and protocol version. */
+    /**
+     * First message after connect: identifies the sender and protocol version.
+     * [endpoints] ("host:port") are the sender's current dial addresses; a receiver that
+     * knows this peer refreshes its stored row so old addresses can't rot (a v1 peer omits
+     * the field and a v1 receiver ignores it). Note the Hello itself is not authenticated —
+     * a poisoned endpoint list can only send future dials to dead ends (dials still pin the
+     * TLS fingerprint), the same availability-not-confidentiality posture as the
+     * no-client-auth TLS server.
+     */
     @Serializable
     @SerialName("hello")
     data class Hello(
         @SerialName("dev") val deviceId: String,
         @SerialName("v") val protocolVersion: Int = 1,
+        @SerialName("ep") val endpoints: List<String> = emptyList(),
     ) : ControlMessage
 
     /**

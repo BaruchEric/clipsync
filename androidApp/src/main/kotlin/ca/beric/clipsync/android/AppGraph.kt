@@ -26,6 +26,7 @@ import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.pairing.PairingManager
+import ca.beric.clipsync.pairing.PairingPayload
 import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.SyncEngine
@@ -123,6 +124,9 @@ object AppGraph {
             launch { files.transfers.collect { _transfers.value = it } }
             val pairing = PairingManager(identity, peerStore)
             pairingManager = pairing
+            // Set after startServer decides whether this device serves; the Hello lambda
+            // reads it per link, so endpoints are only advertised once genuinely dialable.
+            var servingFlag = false
             val manager = ConnectionManager(
                 localDeviceId = identity.deviceId,
                 tlsIdentity = tls, // now serves too (symmetric P2P) when a cert is available
@@ -140,12 +144,18 @@ object AppGraph {
                     }
                 },
                 fileEngine = files,
+                myEndpoints = { if (servingFlag) localAddresses().map { a -> "$a:$SYNC_PORT" } else emptyList() },
+                endpointSink = { id, eps ->
+                    peerStore.updateAddresses(id, eps)
+                    Log.i(TAG, "endpoints refreshed for $id -> $eps")
+                },
             )
             connectionManager = manager
             // Netty-on-Android is the least-proven thing here: a server failure must not
             // kill the process — the dial path still works.
             val serving = tls != null && runCatching { manager.startServer(SYNC_PORT) }
                 .onFailure { Log.w(TAG, "server start failed: ${it.message}") }.isSuccess
+            servingFlag = serving
             myPayload = pairing.myPayload(
                 certFingerprint = tls?.fingerprint ?: CLIENT_NO_CERT,
                 addresses = if (serving) localAddresses() else emptyList(),
@@ -161,6 +171,8 @@ object AppGraph {
                 runCatching {
                     NsdDiscovery(appContext).start(identity.deviceId, SYNC_PORT) { found ->
                         val peer = peerStore.get(found.deviceId) ?: return@start
+                        // Logged so an on-device run can attribute a connect to mDNS vs. the dialer.
+                        Log.i(TAG, "mDNS discovered ${found.deviceId} at ${found.host}:${found.port}; dialing")
                         scope.launch {
                             manager.dialPeer(found.deviceId, listOf("${found.host}:${found.port}"), peer.certFingerprint)
                         }
@@ -213,7 +225,12 @@ object AppGraph {
      */
     suspend fun pairFromScan(payloadText: String): Boolean {
         val ok = pair(payloadText)
-        if (ok) connectionManager?.offerReciprocalPairing()
+        if (ok) {
+            // Target the scanned device specifically: pairing completes (or refreshes) even
+            // when other peers connect in between, and immediately if it's already linked.
+            PairingPayload.decode(payloadText)?.deviceId
+                ?.let { connectionManager?.offerReciprocalPairing(it) }
+        }
         return ok
     }
 

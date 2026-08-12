@@ -140,6 +140,13 @@ fun main() {
                 }
             },
             fileEngine = fileEngine,
+            // Fresh per link, so peers track this Mac across network changes; stored rows
+            // refresh from the peer's Hello the same way (stale-endpoint fix, 2026-08-12).
+            myEndpoints = { localAddresses().map { addr -> "$addr:$SYNC_PORT" } },
+            endpointSink = { id, eps ->
+                peerStore.updateAddresses(id, eps)
+                println("clipsync: endpoints refreshed for $id -> $eps")
+            },
         )
         manager.startServer(SYNC_PORT, host = "0.0.0.0")
         // Symmetric P2P: also dial known peers (whichever side connects first wins; the
@@ -149,6 +156,8 @@ fun main() {
         runCatching {
             JmDnsDiscovery().start(identity.deviceId, SYNC_PORT) { found ->
                 val peer = peerStore.get(found.deviceId) ?: return@start
+                // Logged so an on-device run can attribute a connect to mDNS vs. the dialer.
+                println("clipsync: mDNS discovered ${found.deviceId} at ${found.host}:${found.port}; dialing")
                 appScope.launch {
                     manager.dialPeer(found.deviceId, listOf("${found.host}:${found.port}"), peer.certFingerprint)
                 }

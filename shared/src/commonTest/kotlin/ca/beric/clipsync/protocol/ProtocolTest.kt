@@ -16,6 +16,15 @@ class ProtocolTest {
     }
 
     @Test
+    fun helloEndpointsRoundTripAndLegacyHelloStillDecodes() {
+        val msg = ControlMessage.Hello("mac-1", 1, endpoints = listOf("192.168.1.32:47653", "100.72.29.68:47653"))
+        assertEquals(msg, ControlCodec.decode(ControlCodec.encode(msg)))
+        // A v1 peer sends no "ep" field; it must decode with empty endpoints, not fail.
+        val legacy = ControlCodec.decode("""{"t":"hello","dev":"old-1","v":1}""")
+        assertEquals(ControlMessage.Hello("old-1", 1, emptyList()), legacy)
+    }
+
+    @Test
     fun clipUpdateRoundTripsWithSealedBytes() {
         val sealed = ByteArray(40) { it.toByte() }
         val msg = ControlMessage.ClipUpdate.of(

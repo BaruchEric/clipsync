@@ -143,26 +143,71 @@ class ConnectionManagerTest {
         val engineA = SyncEngine("AAA", repo(), applierA)
         val engineB = SyncEngine("BBB", repo(), applierB)
 
+        var aPairCount = 0
         a = ConnectionManager(
             "AAA", aTls, engineA, { aPeers.get(it)?.perPairKey }, scope,
-            pairingSink = { json -> aPairing.pair(json, 0)?.deviceId },
+            pairingSink = { json -> aPairing.pair(json, 0)?.deviceId?.also { aPairCount++ } },
         ).also { it.startServer(17798, host = "127.0.0.1") }
         b = ConnectionManager(
             "BBB", TlsIdentity.generate("B"), engineB, { bPeers.get(it)?.perPairKey }, scope,
             myPayload = { bPayload },
-        ).also { it.offerReciprocalPairing() }
+        ).also { it.offerReciprocalPairing("AAA") }
 
         withTimeout(20_000) {
             scope.launch { b!!.dialPeer("AAA", listOf("127.0.0.1:17798"), aTls.fingerprint) }
             withTimeout(10_000) { while (!a!!.isConnected("BBB") || !b!!.isConnected("AAA")) delay(20) }
             // A saved B from the PairRequest, deriving the same key.
             assertEquals(keyBA.toList(), aPeers.get("BBB")?.perPairKey?.toList())
+            assertEquals(1, aPairCount)
             engineA.onLocalCapture("A to B", nowMs = 100)
             withTimeout(5_000) { while (applierB.applied.isEmpty()) delay(20) }
             assertEquals("A to B", applierB.applied.last())
             engineB.onLocalCapture("B to A", nowMs = 200)
             withTimeout(5_000) { while (applierA.applied.isEmpty()) delay(20) }
             assertEquals("B to A", applierA.applied.last())
+
+            // Re-scan while already connected: the payload must go out over the existing
+            // link immediately (no reconnect needed) — a re-pair refreshes A's stored row.
+            b!!.offerReciprocalPairing("AAA")
+            withTimeout(5_000) { while (aPairCount < 2) delay(20) }
+        }
+    }
+
+    /**
+     * Every Hello carries the sender's current endpoints; a receiver that registered the
+     * peer persists them via [ConnectionManager]'s endpointSink — stored addresses can't
+     * rot (the S24's stale Parallels endpoints, 2026-08-12).
+     */
+    @Test
+    fun helloEndpointsReachTheSinkOnBothSides() = runBlocking {
+        ClipsyncCrypto.ensureInitialized()
+        val idA = TlsIdentity.generate("A")
+        val ka = ClipsyncCrypto.generateKeyPair()
+        val kb = ClipsyncCrypto.generateKeyPair()
+        val keyA = ClipsyncCrypto.deriveSharedKey(ka.secretKey, ka.publicKey, kb.publicKey)
+        val keyB = ClipsyncCrypto.deriveSharedKey(kb.secretKey, kb.publicKey, ka.publicKey)
+
+        val refreshedOnA = mutableMapOf<String, List<String>>()
+        val refreshedOnB = mutableMapOf<String, List<String>>()
+        a = ConnectionManager(
+            "A", idA, SyncEngine("A", repo(), RecordingApplier()), { if (it == "B") keyA else null }, scope,
+            myEndpoints = { listOf("10.0.0.1:47653", "100.1.2.3:47653") },
+            endpointSink = { id, eps -> refreshedOnA[id] = eps },
+        ).also { it.startServer(17797, host = "127.0.0.1") }
+        b = ConnectionManager(
+            "B", TlsIdentity.generate("B"), SyncEngine("B", repo(), RecordingApplier()),
+            { if (it == "A") keyB else null }, scope,
+            myEndpoints = { listOf("10.0.0.2:47653") },
+            endpointSink = { id, eps -> refreshedOnB[id] = eps },
+        )
+
+        withTimeout(15_000) {
+            scope.launch { b!!.dial("127.0.0.1", 17797, idA.fingerprint) }
+            withTimeout(10_000) {
+                while (refreshedOnB["A"] == null || refreshedOnA["B"] == null) delay(20)
+            }
+            assertEquals(listOf("10.0.0.1:47653", "100.1.2.3:47653"), refreshedOnB["A"])
+            assertEquals(listOf("10.0.0.2:47653"), refreshedOnA["B"])
         }
     }
 }
