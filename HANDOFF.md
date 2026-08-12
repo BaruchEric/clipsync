@@ -120,6 +120,27 @@ Still open on M2, deliberately: the strict gate is a copy from another app with 
 **backgrounded** (and surviving Doze). Normal phone use will prove it in the field — if
 copies keep appearing on the Mac today, it's closed.
 
+### Follow-up hardening, same day (all live-verified on the S24)
+
+- **Self-healing endpoints**: every Hello now carries the sender's current dial endpoints;
+  a receiver holding the peer's key persists them (`PeerStore.updateAddresses`). Live: Mac
+  tracks the phone at `192.168.1.45:47653`; phone holds the clean Mac list. Cold-start
+  share is down to **~4 s** (was ~8 s, was ∞ before the dial-timeout fix).
+- **Reciprocal pairing is per-device-id** (was one global flag): the payload goes out when
+  the scanned peer's Hello arrives, or **immediately over an existing link** — a re-scan
+  refreshes the peer without waiting for a reconnect. Closes the documented multi-peer
+  half-pair edge.
+- **mDNS on real Wi-Fi — VERIFIED both directions**, after fixing a real bug the new
+  attribution log exposed: the phone "discovered" the Mac at **127.0.0.1** and dialed
+  itself. Cause: JmDNS was created with `InetAddress.getLocalHost()`, which is loopback on
+  stock macOS — it both advertised 127.0.0.1 and couldn't see LAN multicast. Now bound to
+  the first real LAN IPv4. Evidence: Mac log `mDNS discovered <S24> at 192.168.1.45:47653;
+  dialing`; `dns-sd -Z _clipsync._tcp` shows both adverts with real SRV targets
+  (`192-168-1-32.local.`, `Android_1MX8PLN1.local.`). A pre-fix loopback record can linger
+  in Android's mDNS cache until TTL; harmless.
+- **CI verified green** on its first real run (the workflow had never executed).
+  `versionName 0.2.0`, suite at 63 tests.
+
 ## On-device pairing run (2026-08-08) — VERIFIED
 
 Harness: `scripts/pairing-test.sh` (`preflight | reset | run | verify | evidence | sync | logs | stop`).
