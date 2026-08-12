@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
         runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
         handlePairingIntent(intent)
         handleShareIntent(intent)
+        handleSendPathIntent(intent)
         setContent { Screen() }
     }
 
@@ -89,6 +90,19 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         handlePairingIntent(intent)
         handleShareIntent(intent)
+        handleSendPathIntent(intent)
+    }
+
+    /**
+     * adb harness hook (share-sheet is the real path):
+     *   adb shell am start -n ca.beric.clipsync/.MainActivity --es send_file_path <app-readable path>
+     */
+    private fun handleSendPathIntent(intent: Intent?) {
+        val path = intent?.getStringExtra("send_file_path") ?: return
+        AppGraph.scope.launch {
+            val ok = AppGraph.sendLocalFile(path)
+            Log.i("clipsyncShare", "send-from-intent path=$path ok=$ok")
+        }
     }
 
     /** Share-sheet entry: stream the shared content to connected peers ("send to my Mac"). */

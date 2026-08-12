@@ -46,7 +46,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Process-wide singletons and the Android sync wiring. Initialized from [ClipsyncApp]
@@ -232,6 +234,7 @@ object AppGraph {
             Log.w(TAG, "sendSharedFiles gave up waiting for sync init")
             return 0
         }
+        awaitPeerConnected()
         val resolver = context.applicationContext.contentResolver
         var sent = 0
         for (uri in uris) {
@@ -243,6 +246,33 @@ object AppGraph {
             if (files.sendFile(source)) sent++ else Log.w(TAG, "share: no peers connected")
         }
         return sent
+    }
+
+    /** Harness twin of [sendSharedFiles]: streams an app-readable filesystem path to peers. */
+    suspend fun sendLocalFile(path: String): Boolean {
+        var engine = fileEngine
+        var waited = 0
+        while (engine == null && waited < 100) {
+            delay(50)
+            engine = fileEngine
+            waited++
+        }
+        val files = engine ?: return false
+        awaitPeerConnected()
+        val f = File(path)
+        if (!f.isFile) return false
+        val source = FileSource(f.name, f.length(), "application/octet-stream") { f.inputStream() }
+        return files.sendFile(source)
+    }
+
+    /**
+     * A share often cold-starts the process (share-sheet → activity → startSync), so the
+     * dialer may still be connecting when the send is requested. Waiting here turns
+     * "first share after a while always fails" into a short pause.
+     */
+    private suspend fun awaitPeerConnected(timeoutMs: Long = 10_000) {
+        withTimeoutOrNull(timeoutMs) { connectedPeers.first { it.isNotEmpty() } }
+            ?: Log.w(TAG, "no peer connected after ${timeoutMs}ms; sending anyway (will no-op)")
     }
 
     /** Resolves a content Uri's display name, exact size, and mime into a streamable source. */

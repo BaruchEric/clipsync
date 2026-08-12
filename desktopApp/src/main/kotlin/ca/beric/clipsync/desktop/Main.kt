@@ -157,6 +157,7 @@ fun main() {
         // File-based pairing bootstrap kept for headless testing (QR is the primary path).
         File(File(System.getProperty("user.home"), ".clipsync").apply { mkdirs() }, "my-payload.txt").writeText(myPayload)
         watchPeerPayload(appScope, pairing)
+        watchSendFile(appScope, fileEngine)
         println("clipsync: identity ${identity.deviceId}, TLS fp ${tls.fingerprint}, server :$SYNC_PORT")
         Boot(engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload)
     }
@@ -318,6 +319,32 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1 shl 20 -> "%.1f MB".format(bytes / (1 shl 20).toDouble())
     bytes >= 1 shl 10 -> "%.0f KB".format(bytes / (1 shl 10).toDouble())
     else -> "$bytes B"
+}
+
+/**
+ * Polls ~/.clipsync/send-file.txt: writing an absolute path there streams that file to the
+ * connected peers. Headless-harness hook in the peer-payload.txt idiom — drag-and-drop and
+ * the picker are the real UI; an on-device run needs a scriptable send with assertable logs.
+ */
+private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine) {
+    val file = File(File(System.getProperty("user.home"), ".clipsync"), "send-file.txt")
+    scope.launch {
+        var last: String? = null
+        while (true) {
+            delay(1000)
+            val text = runCatching { if (file.exists()) file.readText().trim() else null }.getOrNull()
+            if (!text.isNullOrEmpty() && text != last) {
+                last = text
+                val f = File(text)
+                if (f.isFile) {
+                    println("clipsync: send-file start path=$text size=${f.length()}")
+                    sendLocalFile(fileEngine, f)
+                } else {
+                    println("clipsync: send-file not a file: $text")
+                }
+            }
+        }
+    }
 }
 
 /** Polls ~/.clipsync/peer-payload.txt and pairs whenever its contents change. */
