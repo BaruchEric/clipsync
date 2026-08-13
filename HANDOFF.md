@@ -141,7 +141,20 @@ copies keep appearing on the Mac today, it's closed.
 - **CI verified green** on its first real run (the workflow had never executed).
   `versionName 0.2.0`, suite at 66 tests.
 
-### LTE session (2026-08-12 evening) — blocked on phone Tailscale, and a gap found + fixed
+### LTE session, part 2 (2026-08-12 17:31) — m5 gate MET
+
+Eric enabled Tailscale on the phone: tailnet answered at 17:28:38, link up at 17:29:08 with
+the phone's Hello refreshing its stored endpoints to `[100.84.20.32:47653, 100.82.0.66:47653]`
+(carrier CGNAT + tailnet — the refresh surviving a network switch, as designed). At link-up
+the Mac replayed its newest clip to the phone over the tailnet (the phone's "Received
+clipboard-….png" notification is the visible receipt). At **17:31:37** a Gallery photo copied
+on the phone landed on the Mac pasteboard **within ~3 s** over LTE via the relay —
+4000×3000, compressed JPEG on the wire, E2E-encrypted. **m5 tagged.** This also hand-confirms
+the Gallery "copy photo" capture shape left open under image clipboard. The first copy
+(pre-link) stayed marooned as expected: the phone still runs the pre-replay APK — install the
+current build at next Wi-Fi/USB contact and offline copies replay from then on.
+
+### LTE session, part 1 (2026-08-12 evening) — blocked on phone Tailscale, and a gap found + fixed
 
 Eric switched the S24 to LTE and copied a photo. Nothing arrived, for two stacked reasons:
 
