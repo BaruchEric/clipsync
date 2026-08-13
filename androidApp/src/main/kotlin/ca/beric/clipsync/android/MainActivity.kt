@@ -1,6 +1,11 @@
 package ca.beric.clipsync.android
 
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.RemoteInput
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -45,8 +50,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import ca.beric.clipsync.R
+import ca.beric.clipsync.android.capture.NotifMirrorService
 import ca.beric.clipsync.android.capture.SyncForegroundService
+import ca.beric.clipsync.android.capture.TestReplyReceiver
 import ca.beric.clipsync.core.ClipEntry
 import ca.beric.clipsync.core.LOCAL_DEVICE_ID
 import ca.beric.clipsync.crypto.ClipsyncCrypto
@@ -132,6 +140,9 @@ class MainActivity : ComponentActivity() {
         if (intent?.hasExtra("debug_read_clip") == true) {
             AppGraph.scope.launch { Log.i("clipsyncShare", "debug-read ${AppGraph.debugReadClip()}") }
         }
+        if (intent?.hasExtra("post_test_notification") == true) {
+            postTestNotification()
+        }
     }
 
     /** Share-sheet entry: stream the shared content to connected peers ("send to my Mac"). */
@@ -211,6 +222,48 @@ class MainActivity : ComponentActivity() {
     private fun batteryExempt(): Boolean =
         getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
 
+    private fun notifMirrorEnabled(): Boolean =
+        NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+
+    private fun smsGranted(): Boolean =
+        checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED &&
+            checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        @Suppress("DEPRECATION")
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == SMS_REQUEST_CODE) {
+            AppGraph.onSmsPermissionsChanged()
+            refreshTick.intValue += 1
+        }
+    }
+
+    /** Harness hook: a notification with a RemoteInput action, for verifying desktop replies. */
+    private fun postTestNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel("clipsync-test", "clipsync reply test", NotificationManager.IMPORTANCE_DEFAULT),
+        )
+        val replyIntent = PendingIntent.getBroadcast(
+            this,
+            1,
+            Intent(this, TestReplyReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE, // RemoteInput requires mutable
+        )
+        val action = Notification.Action.Builder(null, "Reply", replyIntent)
+            .addRemoteInput(RemoteInput.Builder(TestReplyReceiver.RESULT_KEY).setLabel("Reply").build())
+            .build()
+        val notif = Notification.Builder(this, "clipsync-test")
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle("clipsync reply test")
+            .setContentText("Reply to this from the Mac")
+            .addAction(action)
+            .build()
+        manager.notify(NotifMirrorService.TEST_TAG, 4242, notif)
+        Log.i("clipsyncNotif", "test notification posted")
+    }
+
     @Composable
     private fun Screen() {
         val tick by refreshTick
@@ -284,6 +337,25 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                    if (!notifMirrorEnabled()) {
+                        StatusCard(
+                            "Notification mirroring is off",
+                            "See and reply to phone notifications on your computer (opt-in).",
+                            "Enable",
+                        ) { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                    }
+                    if (!smsGranted()) {
+                        StatusCard(
+                            "Messages on your computer is off",
+                            "Read and send texts from the desktop app (opt-in).",
+                            "Grant",
+                        ) {
+                            requestPermissions(
+                                arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS),
+                                SMS_REQUEST_CODE,
+                            )
+                        }
+                    }
                 }
 
                 Text("Activity", style = MaterialTheme.typography.titleSmall)
@@ -294,6 +366,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val SHIZUKU_REQUEST_CODE = 4001
+        private const val SMS_REQUEST_CODE = 4002
     }
 }
 

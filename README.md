@@ -33,6 +33,14 @@ an upsell.
   whole-file SHA-256 verified before the file is published. Desktop: drag-and-drop onto the
   clipsync window or "Send a file…", received files in `~/Downloads/clipsync`. Android: share
   to clipsync from any app; received files in `Download/clipsync` with a notification.
+- **Notification mirroring (opt-in).** Phone notifications appear as native desktop
+  notifications and in a Notifications tab; ones that take an inline reply (messaging apps)
+  can be answered from the desktop. Requires granting clipsync notification access on the
+  phone; off until you do. Content travels sealed like everything else.
+- **Messages (opt-in).** Read recent SMS conversations and send texts from the desktop
+  Messages tab. Requires granting SMS permissions on the phone (F-Droid-fine; this is why
+  clipsync doesn't target Google Play). Address-only on purpose — contact names would need
+  READ_CONTACTS, which clipsync never requests. MMS/RCS are out of scope.
 
 ## Android background capture
 

@@ -120,6 +120,111 @@ sealed interface ControlMessage {
         @SerialName("id") val id: String,
         @SerialName("reason") val reason: String,
     ) : ControlMessage
+
+    /**
+     * Envelope for notification-mirroring and messages traffic: [sealedB64] is the per-pair
+     * sealed JSON of a [MirrorEvent], so notification text and SMS bodies are E2E-encrypted
+     * exactly like clip payloads. Pre-0.3 peers drop the unknown type; the features degrade
+     * to absent, never break clipboard/file sync.
+     */
+    @Serializable
+    @SerialName("mirror")
+    data class Mirror(
+        @SerialName("data") val sealedB64: String,
+    ) : ControlMessage {
+        val sealedBytes: ByteArray get() = Base64.decode(sealedB64)
+
+        companion object {
+            fun of(sealed: ByteArray) = Mirror(Base64.encode(sealed))
+        }
+    }
+}
+
+/** One phone notification, or one messages request/response, inside a sealed [ControlMessage.Mirror]. */
+@Serializable
+sealed interface MirrorEvent {
+
+    @Serializable
+    @SerialName("notif")
+    data class NotifPosted(
+        @SerialName("key") val key: String,
+        @SerialName("app") val app: String,
+        @SerialName("title") val title: String,
+        @SerialName("text") val text: String,
+        @SerialName("when") val whenMs: Long,
+        @SerialName("reply") val canReply: Boolean = false,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("notif-reply")
+    data class NotifReply(
+        @SerialName("key") val key: String,
+        @SerialName("text") val text: String,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("sms-threads?")
+    data object SmsQueryThreads : MirrorEvent
+
+    @Serializable
+    @SerialName("sms-threads")
+    data class SmsThreads(
+        @SerialName("list") val threads: List<SmsThread>,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("sms-thread?")
+    data class SmsQueryThread(
+        @SerialName("id") val threadId: Long,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("sms-msgs")
+    data class SmsMessages(
+        @SerialName("id") val threadId: Long,
+        @SerialName("list") val messages: List<SmsMessage>,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("sms-send")
+    data class SmsSend(
+        @SerialName("to") val to: String,
+        @SerialName("body") val body: String,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("sms-sent")
+    data class SmsSent(
+        @SerialName("ok") val ok: Boolean,
+        @SerialName("to") val to: String,
+    ) : MirrorEvent
+}
+
+@Serializable
+data class SmsThread(
+    @SerialName("id") val threadId: Long,
+    @SerialName("addr") val address: String,
+    @SerialName("snip") val snippet: String,
+    @SerialName("date") val dateMs: Long,
+    @SerialName("n") val count: Int,
+)
+
+@Serializable
+data class SmsMessage(
+    @SerialName("addr") val address: String,
+    @SerialName("body") val body: String,
+    @SerialName("date") val dateMs: Long,
+    @SerialName("out") val outbound: Boolean,
+)
+
+/** Serializes mirror events; unknown subtypes (newer peers) decode to null and are dropped. */
+object MirrorCodec {
+    private val json = Json { classDiscriminator = "t"; ignoreUnknownKeys = true; encodeDefaults = true }
+
+    fun encode(event: MirrorEvent): String = json.encodeToString<MirrorEvent>(event)
+
+    fun decode(text: String): MirrorEvent? =
+        runCatching { json.decodeFromString<MirrorEvent>(text) }.getOrNull()
 }
 
 /** Serializes control messages to/from JSON text frames. */

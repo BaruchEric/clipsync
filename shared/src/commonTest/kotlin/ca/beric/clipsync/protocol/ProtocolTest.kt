@@ -89,4 +89,35 @@ class ProtocolTest {
     fun chunkFrameRejectsTruncated() {
         assertNull(ChunkFrame.decode(ByteArray(10)))
     }
+
+    @Test
+    fun mirrorEnvelopeRoundTripsWithSealedBytes() {
+        val sealed = ByteArray(24) { (it * 3).toByte() }
+        val msg = ControlMessage.Mirror.of(sealed)
+        val decoded = ControlCodec.decode(ControlCodec.encode(msg)) as ControlMessage.Mirror
+        assertContentEquals(sealed, decoded.sealedBytes)
+    }
+
+    @Test
+    fun mirrorEventsRoundTrip() {
+        val events = listOf(
+            MirrorEvent.NotifPosted("0|app|1", "Signal", "Alice", "see you", 12L, canReply = true),
+            MirrorEvent.NotifReply("0|app|1", "on my way"),
+            MirrorEvent.SmsQueryThreads,
+            MirrorEvent.SmsThreads(listOf(SmsThread(3L, "+15550001111", "hey", 1L, 9))),
+            MirrorEvent.SmsQueryThread(3L),
+            MirrorEvent.SmsMessages(3L, listOf(SmsMessage("+15550001111", "hey", 1L, outbound = false))),
+            MirrorEvent.SmsSend("+15550001111", "hello back"),
+            MirrorEvent.SmsSent(ok = true, to = "+15550001111"),
+        )
+        for (event in events) {
+            assertEquals(event, MirrorCodec.decode(MirrorCodec.encode(event)), "round trip: $event")
+        }
+    }
+
+    @Test
+    fun unknownMirrorEventDecodesNull() {
+        assertNull(MirrorCodec.decode("""{"t":"hologram","x":1}"""))
+        assertNull(MirrorCodec.decode("not json"))
+    }
 }

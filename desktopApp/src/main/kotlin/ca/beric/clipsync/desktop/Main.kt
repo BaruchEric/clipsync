@@ -2,6 +2,8 @@ package ca.beric.clipsync.desktop
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,16 +16,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,9 +40,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import ca.beric.clipsync.core.Clip
 import ca.beric.clipsync.core.ClipRepository
@@ -49,6 +57,10 @@ import ca.beric.clipsync.db.ClipsyncDb
 import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
+import ca.beric.clipsync.mirror.MirrorEngine
+import ca.beric.clipsync.protocol.MirrorEvent
+import ca.beric.clipsync.protocol.SmsMessage
+import ca.beric.clipsync.protocol.SmsThread
 import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.Peer
 import ca.beric.clipsync.pairing.PeerStore
@@ -62,10 +74,14 @@ import ca.beric.clipsync.transfer.TransferState
 import ca.beric.clipsync.transport.ConnectionManager
 import ca.beric.clipsync.transport.PeerDialer
 import ca.beric.clipsync.transport.TlsIdentityStore
+import java.util.Date
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -131,6 +147,33 @@ fun main() {
             FolderFileSink(File(System.getProperty("user.home"), "Downloads/clipsync")),
             log = { println("clipsync: $it") },
         )
+        // Phone notifications + messages (M7/M8). Content never hits this log — lengths only.
+        val phoneNotifs = MutableStateFlow(emptyList<MirrorEvent.NotifPosted>())
+        val notifPings = MutableSharedFlow<MirrorEvent.NotifPosted>(extraBufferCapacity = 16)
+        val smsThreads = MutableStateFlow(emptyList<SmsThread>())
+        val smsMessages = MutableStateFlow(mapOf<Long, List<SmsMessage>>())
+        val mirrorEngine = MirrorEngine(
+            onEvent = { _, event ->
+                when (event) {
+                    is MirrorEvent.NotifPosted -> {
+                        phoneNotifs.update { (listOf(event) + it).take(20) }
+                        notifPings.tryEmit(event)
+                        println("clipsync: mirror notif from ${event.app} (${event.text.length} chars, reply=${event.canReply})")
+                    }
+                    is MirrorEvent.SmsThreads -> {
+                        smsThreads.value = event.threads
+                        println("clipsync: sms threads: ${event.threads.size}")
+                    }
+                    is MirrorEvent.SmsMessages -> {
+                        smsMessages.update { it + (event.threadId to event.messages) }
+                        println("clipsync: sms thread ${event.threadId}: ${event.messages.size} messages")
+                    }
+                    is MirrorEvent.SmsSent -> println("clipsync: sms send ok=${event.ok}")
+                    else -> Unit // desktop → phone kinds have no meaning inbound
+                }
+            },
+            log = { println("clipsync: $it") },
+        )
         val manager = ConnectionManager(
             localDeviceId = identity.deviceId,
             tlsIdentity = tls,
@@ -149,6 +192,7 @@ fun main() {
                 }
             },
             fileEngine = fileEngine,
+            mirror = mirrorEngine,
             // Fresh per link, so peers track this Mac across network changes; stored rows
             // refresh from the peer's Hello the same way (stale-endpoint fix, 2026-08-12).
             myEndpoints = { localAddresses().map { addr -> "$addr:$SYNC_PORT" } },
@@ -178,7 +222,10 @@ fun main() {
         watchPeerPayload(appScope, pairing)
         watchSendFile(appScope, fileEngine)
         println("clipsync: identity ${identity.deviceId}, TLS fp ${tls.fingerprint}, server :$SYNC_PORT")
-        Boot(engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload)
+        Boot(
+            engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload,
+            mirrorEngine, phoneNotifs, notifPings, smsThreads, smsMessages,
+        )
     }
 
     // Capture: record locally for history and hand to the engine to broadcast.
@@ -198,14 +245,27 @@ fun main() {
         }
     }
 
+    watchMirrorCmd(appScope, boot)
+
     application {
         var windowVisible by remember { mutableStateOf(true) }
         val icon = remember { trayIcon() }
         val connected by boot.connectedPeers.collectAsState()
         val trayPeers = remember(connected) { peerStore.all() }
         val status = statusLine(connected, trayPeers)
+        val trayState = rememberTrayState()
+
+        // Mirrored phone notifications surface as native macOS notifications.
+        LaunchedEffect(Unit) {
+            boot.notifPings.collect { n ->
+                trayState.sendNotification(
+                    androidx.compose.ui.window.Notification("${n.app} — ${n.title}", n.text),
+                )
+            }
+        }
 
         Tray(
+            state = trayState,
             icon = icon,
             tooltip = "clipsync (${boot.deviceName}) — $status",
             onAction = { windowVisible = true },
@@ -252,7 +312,7 @@ fun main() {
                     }
                     Unit
                 }
-                DesktopScreen(repo, boot.myPayload, peerStore, connected, boot.fileEngine, pickAndSend)
+                DesktopScreen(repo, peerStore, connected, boot, pickAndSend)
             }
         }
     }
@@ -264,6 +324,11 @@ private class Boot(
     val deviceName: String,
     val connectedPeers: StateFlow<Set<String>>,
     val myPayload: String,
+    val mirror: MirrorEngine,
+    val phoneNotifs: StateFlow<List<MirrorEvent.NotifPosted>>,
+    val notifPings: MutableSharedFlow<MirrorEvent.NotifPosted>,
+    val smsThreads: StateFlow<List<SmsThread>>,
+    val smsMessages: StateFlow<Map<Long, List<SmsMessage>>>,
 )
 
 /** Streams [file] to every connected peer; logs instead of throwing (UI shows the state). */
@@ -284,14 +349,13 @@ private fun statusLine(connected: Set<String>, peers: List<Peer>): String {
     }
 }
 
-/** Window content: device status first, then sending, activity, and pairing. */
+/** Window content: device status first, then sending, the tabbed panes, and pairing. */
 @Composable
 private fun DesktopScreen(
     repo: ClipRepository,
-    myPayload: String,
     peerStore: PeerStore,
     connected: Set<String>,
-    fileEngine: FileTransferEngine,
+    boot: Boot,
     onPickFiles: () -> Unit,
 ) {
     MaterialTheme {
@@ -311,7 +375,7 @@ private fun DesktopScreen(
             if (peers.isEmpty()) {
                 Text("Scan this QR with the phone app to pair:", style = MaterialTheme.typography.labelMedium)
                 Image(
-                    bitmap = remember(myPayload) { qrImageBitmap(myPayload) },
+                    bitmap = remember(boot.myPayload) { qrImageBitmap(boot.myPayload) },
                     contentDescription = "pairing QR code",
                     modifier = Modifier.size(180.dp),
                 )
@@ -328,15 +392,171 @@ private fun DesktopScreen(
                     Text("received → ~/Downloads/clipsync", style = MaterialTheme.typography.labelSmall)
                 }
             }
-            val transfers by fileEngine.transfers.collectAsState()
+            val transfers by boot.fileEngine.transfers.collectAsState()
             transfers.take(4).forEach { t -> TransferRow(t, labelFor) }
             HorizontalDivider()
-            Text("Activity", style = MaterialTheme.typography.titleSmall)
-            Box(Modifier.weight(1f)) { HistoryScreen(repo, labelFor) }
-            if (peers.isNotEmpty()) PairMoreFooter(myPayload)
+            var tab by remember { mutableStateOf("Activity") }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("Activity", "Notifications", "Messages").forEach { name ->
+                    TextButton(onClick = { tab = name }) {
+                        Text(if (tab == name) "• $name" else name, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                when (tab) {
+                    "Notifications" -> NotificationsPane(boot)
+                    "Messages" -> MessagesPane(boot)
+                    else -> HistoryScreen(repo, labelFor)
+                }
+            }
+            if (peers.isNotEmpty()) PairMoreFooter(boot.myPayload)
         }
     }
 }
+
+/** Mirrored phone notifications, newest first; RemoteInput-capable ones take a reply. */
+@Composable
+private fun NotificationsPane(boot: Boot) {
+    val notifs by boot.phoneNotifs.collectAsState()
+    val scope = rememberCoroutineScope()
+    if (notifs.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                "No phone notifications yet.\nEnable \"Notification mirroring\" in the phone app.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(notifs.size) { i ->
+            val n = notifs[i]
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${n.app} — ${n.title}", style = MaterialTheme.typography.titleSmall)
+                    Text(n.text, style = MaterialTheme.typography.bodyMedium, maxLines = 4)
+                    Text(notifTimeFormat.format(Date(n.whenMs)), style = MaterialTheme.typography.labelSmall)
+                    if (n.canReply) {
+                        var reply by remember(n.key) { mutableStateOf("") }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedTextField(
+                                value = reply,
+                                onValueChange = { reply = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("Reply…") },
+                                singleLine = true,
+                            )
+                            Button(
+                                onClick = {
+                                    val text = reply
+                                    reply = ""
+                                    scope.launch { boot.mirror.send(null, MirrorEvent.NotifReply(n.key, text)) }
+                                },
+                                enabled = reply.isNotBlank(),
+                            ) { Text("Send") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Phone SMS: thread list → one thread → compose. Data arrives via the mirror engine. */
+@Composable
+private fun MessagesPane(boot: Boot) {
+    val threads by boot.smsThreads.collectAsState()
+    val messagesByThread by boot.smsMessages.collectAsState()
+    val scope = rememberCoroutineScope()
+    var openThread by remember { mutableStateOf<SmsThread?>(null) }
+    LaunchedEffect(Unit) { boot.mirror.send(null, MirrorEvent.SmsQueryThreads) }
+
+    val thread = openThread
+    if (thread == null) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (threads.isEmpty()) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "No conversations yet.\nGrant \"Messages\" in the phone app, then Refresh.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(threads.size) { i ->
+                        val t = threads[i]
+                        Card(
+                            Modifier.fillMaxWidth().clickable {
+                                openThread = t
+                                scope.launch { boot.mirror.send(null, MirrorEvent.SmsQueryThread(t.threadId)) }
+                            },
+                        ) {
+                            Column(Modifier.padding(10.dp)) {
+                                Text(t.address, style = MaterialTheme.typography.titleSmall)
+                                Text(t.snippet, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                                Text(
+                                    "${notifTimeFormat.format(Date(t.dateMs))} · ${t.count} recent",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            TextButton(onClick = { scope.launch { boot.mirror.send(null, MirrorEvent.SmsQueryThreads) } }) {
+                Text("Refresh")
+            }
+        }
+    } else {
+        val messages = messagesByThread[thread.threadId].orEmpty()
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { openThread = null }) { Text("← Threads") }
+                Text(thread.address, style = MaterialTheme.typography.titleSmall)
+            }
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(messages.size) { i ->
+                    val m = messages[i]
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(8.dp)) {
+                            Text(
+                                if (m.outbound) "→ ${m.body}" else m.body,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(notifTimeFormat.format(Date(m.dateMs)), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+            var draft by remember(thread.threadId) { mutableStateOf("") }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Text ${thread.address}…") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = {
+                        val body = draft
+                        draft = ""
+                        scope.launch {
+                            boot.mirror.send(null, MirrorEvent.SmsSend(thread.address, body))
+                            // Refresh shortly after; the phone also pushes on provider changes.
+                            kotlinx.coroutines.delay(2500)
+                            boot.mirror.send(null, MirrorEvent.SmsQueryThread(thread.threadId))
+                        }
+                    },
+                    enabled = draft.isNotBlank(),
+                ) { Text("Send") }
+            }
+        }
+    }
+}
+
+private val notifTimeFormat = java.text.SimpleDateFormat("HH:mm")
 
 private val ConnectedGreen = Color(0xFF2E7D32)
 private val OfflineGray = Color(0xFF8E8E93)
@@ -442,6 +662,39 @@ private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine)
                 } else {
                     println("clipsync: send-file not a file: $text")
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Polls ~/.clipsync/mirror-cmd.txt (consumed once read): harness hook for the mirror paths.
+ * Lines: "sms-threads" | "sms-thread <id>" | "sms-send <to> <body…>" | "notif-reply <text…>"
+ * — notif-reply targets the newest reply-capable notification. The tabs are the real UI.
+ */
+private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
+    val file = File(File(System.getProperty("user.home"), ".clipsync"), "mirror-cmd.txt")
+    scope.launch {
+        while (true) {
+            delay(1000)
+            val text = runCatching { if (file.exists()) file.readText().trim() else null }.getOrNull()
+            if (text.isNullOrEmpty()) continue
+            runCatching { file.delete() }
+            for (line in text.lines()) {
+                val parts = line.trim().split(" ", limit = 3)
+                val event = when (parts[0]) {
+                    "sms-threads" -> MirrorEvent.SmsQueryThreads
+                    "sms-thread" -> parts.getOrNull(1)?.toLongOrNull()?.let { MirrorEvent.SmsQueryThread(it) }
+                    "sms-send" -> if (parts.size == 3) MirrorEvent.SmsSend(parts[1], parts[2]) else null
+                    "notif-reply" -> boot.phoneNotifs.value.firstOrNull { it.canReply }
+                        ?.let { MirrorEvent.NotifReply(it.key, line.removePrefix("notif-reply").trim()) }
+                    else -> null
+                }
+                if (event == null) {
+                    println("clipsync: mirror-cmd unrecognized: $line")
+                    continue
+                }
+                println("clipsync: mirror-cmd ${parts[0]} sent=${boot.mirror.send(null, event)}")
             }
         }
     }

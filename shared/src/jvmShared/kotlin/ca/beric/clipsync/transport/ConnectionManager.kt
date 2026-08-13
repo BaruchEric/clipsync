@@ -1,5 +1,6 @@
 package ca.beric.clipsync.transport
 
+import ca.beric.clipsync.mirror.MirrorEngine
 import ca.beric.clipsync.protocol.ControlMessage
 import ca.beric.clipsync.sync.RemotePeer
 import ca.beric.clipsync.sync.SyncEngine
@@ -34,6 +35,8 @@ class ConnectionManager(
     private val pairingSink: ((payloadJson: String) -> String?)? = null,
     /** When set, peers are also registered here and file messages/chunks are routed to it. */
     private val fileEngine: FileTransferEngine? = null,
+    /** When set, peers are also registered here and mirror envelopes are routed to it. */
+    private val mirror: MirrorEngine? = null,
     /** This device's current dial endpoints ("host:port"), carried in every Hello it sends. */
     private val myEndpoints: () -> List<String> = { emptyList() },
     /** Persists a registered peer's refreshed endpoints (from its Hello), so addresses can't rot. */
@@ -135,6 +138,7 @@ class ConnectionManager(
             val remote = RemotePeer(id, key, send = { link.send(it) }, sendChunk = { link.sendChunk(it) })
             engine.addPeer(remote)
             fileEngine?.addPeer(remote)
+            mirror?.addPeer(remote)
             links[id] = link
             _connectedPeers.value = connected.toSet()
             if (pendingReciprocal.remove(id)) myPayload()?.let { link.send(ControlMessage.PairRequest(it)) }
@@ -154,6 +158,7 @@ class ConnectionManager(
                     is ControlMessage.PairRequest -> pairingSink?.invoke(message.payload)?.let { register(it) }
                     is ControlMessage.FileOffer, is ControlMessage.FileAck, is ControlMessage.FileError ->
                         peerId?.let { fileEngine?.onRemoteMessage(it, message) }
+                    is ControlMessage.Mirror -> peerId?.let { mirror?.onRemoteMessage(it, message) }
                     else -> peerId?.let { engine.onRemoteMessage(it, message) }
                 }
             }
@@ -165,6 +170,7 @@ class ConnectionManager(
                 _connectedPeers.value = connected.toSet()
                 engine.removePeer(it)
                 fileEngine?.removePeer(it)
+                mirror?.removePeer(it)
             }
         }
         return peerId != null

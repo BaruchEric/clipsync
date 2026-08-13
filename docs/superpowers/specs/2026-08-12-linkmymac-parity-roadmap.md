@@ -29,8 +29,8 @@ experience*, not cloning the app.
 | QR pairing, no accounts, local-only | ✅ done + SAS MITM check (stronger than reference) | ahead |
 | Android⇄Android | ✅ architecture already symmetric P2P | free differentiator — reference "not yet" |
 | Works off-LAN | ✅ tailnet direct-dial | ahead (reference is LAN-only) |
-| Notification mirroring + reply | ❌ | M7 candidate: `NotificationListenerService` + `RemoteInput` — standard, F-Droid-friendly |
-| SMS/Messages from desktop | ❌ | M8 candidate: needs `READ_SMS`/`SEND_SMS` (fine for F-Droid; Play would reject — we don't target Play) |
+| Notification mirroring + reply | ✅ | **M7 built + verified 2026-08-12** (mirror + RemoteInput reply, E2E-sealed `mirror` envelope) |
+| SMS/Messages from desktop | ✅ | **M8 built 2026-08-12** (threads/read/send from desktop; read path verified on-device; live send = one user tap) |
 | Screen mirror + remote control | ❌ | Out for now: **scrcpy** already does this best (FOSS); remote *input* is feasible via Shizuku (`input` through SHELL uid) if ever wanted |
 | Webcam | ❌ | Out: whole product on its own (video pipeline + virtual camera driver on macOS) |
 | Photos / contacts / file-manager browse | ❌ | Out for now: pull-model browsing is a different trust posture than push-sync; revisit after M6/M7 |
@@ -43,7 +43,7 @@ store-listed feature clipsync lacks; (2) the transport already moves chunked sea
 (SAF/share-sheet in, MediaStore Downloads out); (4) it's the LocalSend use case folded into an
 app that's already persistently paired + E2E-encrypted — i.e. differentiated, not duplicative.
 
-Then M7 notifications, M8 messages — each needs its own spec + Eric sign-off on the permission
-surface before build. Mirror/webcam stay out; document scrcpy as the companion tool.
+M7 + M8: signed off ("go with both", 2026-08-12) and built the same day — plan in
+`docs/superpowers/plans/2026-08-12-m7-m8-notifications-messages.md`. Mirror/webcam stay out; document scrcpy as the companion tool.
 
 Plan for M6: `docs/superpowers/plans/2026-08-12-m6-file-transfer.md`.

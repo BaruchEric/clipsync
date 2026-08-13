@@ -141,6 +141,39 @@ copies keep appearing on the Mac today, it's closed.
 - **CI verified green** on its first real run (the workflow had never executed).
   `versionName 0.2.0`, suite at 66 tests.
 
+### M7 + M8 built and verified (2026-08-12 20:00) — notifications + messages
+
+Eric signed off ("go with both"). One protocol addition carries the pair: a `mirror`
+envelope whose body is the per-pair-sealed JSON of a `MirrorEvent` (notification text and
+SMS bodies E2E-encrypted like clips; pre-0.3 peers drop the unknown type harmlessly).
+`MirrorEngine` (jvmShared) seals/opens and routes; `ConnectionManager` gained a `mirror`
+param. 9 new unit tests (engine seal/tamper/wrong-key/unknown-subtype + protocol round
+trips); suite at 75.
+
+**M7 verified on-device end to end.** Shell-posted notification → Mac in ~2 s
+(`mirror notif from Shell (26 chars)`) + native macOS notification via the tray. Reply:
+a clipsync test notification carrying a RemoteInput action mirrored with `reply=true`;
+the desktop's reply (via the new `~/.clipsync/mirror-cmd.txt` harness hook, `notif-reply
+<text>`) landed back through the stored action's PendingIntent — `notif reply … ok=true`,
+receiver logged `test-reply received len=20`. Filters: own package (except the
+`clipsync-mirror-test` tag), ongoing, group summaries.
+
+**M8 read path verified on-device.** `sms-threads` → 30 conversations in ~2 s;
+`sms-thread 1325` → 15 messages. Threads derive from the newest 500 provider rows,
+address-only (contacts stay off the permission surface). Two Samsung/Android-16 findings
+the hard way: (1) SmsProvider posts change notifications on **content://mms-sms**, not
+content://sms — the observer registers on both; (2) shell-uid `content insert` into the
+SMS provider **silently no-ops** (non-default-app write protection), so the observer can't
+be exercised synthetically — it proves itself on the first real text (desktop logs an
+unprompted "sms threads: N"). Live radio send deliberately left for Eric (one tap in the
+Messages tab, e.g. a text to his own number); everything up to the SmsManager call is the
+same verified path.
+
+Permission surface as signed off: notification access + READ_SMS/SEND_SMS, both opt-in
+cards in the phone UI, both granted this session via adb (`cmd notification
+allow_listener`, `pm grant`) — reversible with `cmd notification disallow_listener` /
+`pm revoke`. Desktop grew Notifications and Messages tabs next to Activity. 0.3.0 / vc4.
+
 ### GUI status pass (2026-08-12 19:20) — closing the visible gap vs LinkMyMac
 
 Eric named the next gap: phone↔desktop GUI status. Both screens went status-first with a

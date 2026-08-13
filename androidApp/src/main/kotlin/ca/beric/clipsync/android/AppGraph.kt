@@ -12,7 +12,9 @@ import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
 import ca.beric.clipsync.android.capture.AndroidClipboardApplier
+import ca.beric.clipsync.android.capture.NotifMirrorService
 import ca.beric.clipsync.android.capture.ShizukuClipboard
+import ca.beric.clipsync.android.sms.SmsBridge
 import ca.beric.clipsync.android.capture.ShizukuClipboardSource
 import ca.beric.clipsync.android.transfer.MediaStoreFileSink
 import ca.beric.clipsync.core.Clip
@@ -28,7 +30,12 @@ import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.pairing.PairingManager
 import ca.beric.clipsync.pairing.PairingPayload
 import ca.beric.clipsync.pairing.PeerStore
+import ca.beric.clipsync.mirror.MirrorEngine
 import ca.beric.clipsync.pairing.pairedLogLine
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collectLatest
+import ca.beric.clipsync.protocol.MirrorEvent
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transfer.FileSource
 import ca.beric.clipsync.transfer.FileTransferEngine
@@ -89,6 +96,12 @@ object AppGraph {
     @Volatile
     private var fileEngine: FileTransferEngine? = null
 
+    private var mirrorEngine: MirrorEngine? = null
+
+    private var smsBridge: SmsBridge? = null
+
+    private var smsObserverStarted = false
+
     private val _transfers = MutableStateFlow<List<TransferState>>(emptyList())
 
     /** Recent file transfers (both directions), for the status UI. */
@@ -127,6 +140,13 @@ object AppGraph {
             files.onFileReceived = { name, _ -> notifyFileReceived(appContext, name) }
             fileEngine = files
             launch { files.transfers.collect { _transfers.value = it } }
+            val sms = SmsBridge(appContext)
+            smsBridge = sms
+            val mirrorE = MirrorEngine(
+                onEvent = { from, event -> handleMirrorEvent(appContext, from, event) },
+                log = { Log.i(TAG, it) },
+            )
+            mirrorEngine = mirrorE
             val pairing = PairingManager(identity, peerStore)
             pairingManager = pairing
             // Set after startServer decides whether this device serves; the Hello lambda
@@ -149,6 +169,7 @@ object AppGraph {
                     }
                 },
                 fileEngine = files,
+                mirror = mirrorE,
                 myEndpoints = { if (servingFlag) localAddresses().map { a -> "$a:$SYNC_PORT" } else emptyList() },
                 endpointSink = { id, eps ->
                     peerStore.updateAddresses(id, eps)
@@ -169,6 +190,7 @@ object AppGraph {
             Log.i(TAG, "clipsync-payload serving=$serving $myPayload")
 
             startCapture(engine, clipboard)
+            startSmsObserverIfGranted()
             PeerDialer(manager, peerStore, scope).start()
             launch { manager.connectedPeers.collect { _connectedPeers.value = it } }
             // mDNS only when we serve (advertising a closed port would mislead peers).
@@ -393,6 +415,66 @@ object AppGraph {
                     .build(),
             )
         }.onFailure { Log.w(TAG, "file-received notification failed: ${it.message}") }
+    }
+
+    /** Called by [NotifMirrorService] for each mirrorable notification. */
+    fun mirrorNotification(event: MirrorEvent.NotifPosted) {
+        scope.launch { mirrorEngine?.send(null, event) }
+    }
+
+    /** Re-checks SMS grants (the observer starts only once they exist). */
+    fun onSmsPermissionsChanged() {
+        startSmsObserverIfGranted()
+    }
+
+    /**
+     * Inbound mirror traffic (desktop → phone). Runs on the transport reader, so every
+     * branch dispatches to [scope] immediately.
+     */
+    private fun handleMirrorEvent(context: Context, from: String, event: MirrorEvent) {
+        when (event) {
+            is MirrorEvent.NotifReply -> scope.launch {
+                val ok = NotifMirrorService.sendReply(context, event.key, event.text)
+                Log.i(TAG, "notif reply key=${event.key} ok=$ok")
+            }
+            is MirrorEvent.SmsQueryThreads -> scope.launch {
+                smsBridge?.takeIf { it.hasPermissions() }?.let {
+                    mirrorEngine?.send(from, MirrorEvent.SmsThreads(it.threads()))
+                }
+            }
+            is MirrorEvent.SmsQueryThread -> scope.launch {
+                smsBridge?.takeIf { it.hasPermissions() }?.let {
+                    mirrorEngine?.send(from, MirrorEvent.SmsMessages(event.threadId, it.messages(event.threadId)))
+                }
+            }
+            is MirrorEvent.SmsSend -> scope.launch {
+                val bridge = smsBridge
+                val ok = bridge != null && bridge.hasPermissions() && bridge.send(event.to, event.body)
+                mirrorEngine?.send(from, MirrorEvent.SmsSent(ok, event.to))
+                Log.i(TAG, "sms send ok=$ok len=${event.body.length}")
+            }
+            // Phone → desktop kinds arriving here would be another phone; nothing to do.
+            is MirrorEvent.NotifPosted, is MirrorEvent.SmsThreads,
+            is MirrorEvent.SmsMessages, is MirrorEvent.SmsSent,
+            -> Unit
+        }
+    }
+
+    @Synchronized
+    private fun startSmsObserverIfGranted() {
+        val bridge = smsBridge ?: return
+        if (smsObserverStarted || !bridge.hasPermissions()) return
+        smsObserverStarted = true
+        val ticks = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        bridge.observe { ticks.tryEmit(Unit) }
+        scope.launch {
+            ticks.collectLatest {
+                delay(1500) // a burst of provider changes becomes one push
+                val sent = mirrorEngine?.send(null, MirrorEvent.SmsThreads(bridge.threads()))
+                Log.i(TAG, "sms push sent=$sent")
+            }
+        }
+        Log.i(TAG, "sms observer started")
     }
 
     private fun startCapture(engine: SyncEngine, clipboard: ShizukuClipboard) {
