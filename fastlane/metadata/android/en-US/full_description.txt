@@ -12,6 +12,10 @@ Features:
   (an image copied on the computer arrives on the phone in Download/clipsync)
 * File transfer: share any file to your paired computer from the Android share sheet;
   files sent from the computer land in Download/clipsync
+* Notification mirroring (opt-in): phone notifications appear on your computer, and
+  ones with an inline reply (messaging apps) can be answered from there
+* Messages (opt-in): read recent SMS conversations and send texts from your computer
+  (needs SMS permissions — the reason clipsync targets F-Droid, not Google Play)
 * Serverless peer-to-peer: no account, no cloud relay, no telemetry
 * End-to-end encryption (XChaCha20-Poly1305) with keys derived at pairing (X25519)
 * Devices authenticate each other by pinned TLS certificate fingerprint

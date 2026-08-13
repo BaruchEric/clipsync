@@ -92,12 +92,13 @@ works as a headless fallback. `scripts/pairing-test.sh` drives and asserts the w
 
 ## Status
 
-All core milestones are verified on real hardware (tags m1–m6): scaffold + macOS watcher,
-Android background capture via Shizuku, crypto + QR/SAS pairing, LAN sync with mDNS
-discovery, tailnet hardening (a photo copied on LTE reaches the Mac in ~3 s over Tailscale),
-and file transfer both directions. Image clipboard works both ways (received images on
-Android save to Download/clipsync). The wider roadmap
-(vs. LinkMyMac/LinkMyDroid: notifications, messages) is in
+Everything is verified on real hardware (tags m1–m7): scaffold + macOS watcher, Android
+background capture via Shizuku, crypto + QR/SAS pairing, LAN sync with mDNS discovery,
+tailnet hardening (a photo copied on LTE reaches the Mac in ~3 s over Tailscale), file
+transfer both directions, offline-copy replay on reconnect, notification mirroring with
+desktop reply, and status-first UI on both apps. Messages (M8) is built with its read path
+verified on-device; the live radio send is the last hand-verification. The parity roadmap
+(vs. LinkMyMac/LinkMyDroid) is in
 `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 
 ## License

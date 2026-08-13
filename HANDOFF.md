@@ -1,6 +1,7 @@
 # clipsync — Build Handoff (2026-08-12)
 
-State after Phase 0 → M6 file transfer. Everything below is green; the transport is wired into both apps and demonstrated end to end.
+State after Phase 0 → M8. Everything below is verified on real hardware (Mac ↔ SM-S921U);
+sessions are logged newest-first below the table.
 
 ## Done & verified
 
@@ -8,13 +9,17 @@ State after Phase 0 → M6 file transfer. Everything below is green; the transpo
 |---|---|---|
 | Phase 0 fork due-diligence | ✅ GREENFIELD | `FORK-ASSESSMENT.md` |
 | M1 scaffold + macOS watcher | ✅ tag `m1` | copy on Mac → SQLDelight history (automated probe) |
-| M2 Android background capture | ✅ tag `m2` | **Shizuku** path; background copy from another app → history, survives Doze, on Android 16 emulator |
-| M3 crypto + pairing + identity | 🟢 **camera-scan gate met on real hardware** (untagged — tag `m3` when Eric confirms) | XChaCha20-Poly1305 vector, X25519+SAS, real Keychain round-trip; **live QR camera pairing Mac↔SM-S921U, SAS 773702 matching on both screens**. See "On-device pairing run" below. |
-| M4 LAN sync (transport + engine) | 🟢 **live sync working** (untagged) | Loopback TLS tests + **live Mac↔Android emulator sync, both directions, 447 ms, pinned TLS, E2E-encrypted**. mDNS: desktop half verified live, Android half unverifiable on emulator. |
-| M5 hardening | 🟢 built (untagged) | Persisted TLS identity, Android serves (symmetric), backoff dialer, status UI, CI. See DEFERRED-QUESTIONS "M5 hardening — DONE". |
-| M6 file transfer | ✅ **VERIFIED on real hardware, both directions** (untagged — tag `m6` when Eric confirms) | Streamed E2E-encrypted files over the paired TLS link, Mac↔SM-S921U on the LAN, sha256-identical each way, incl. the cold-start share path. See "M6 real-S24 run" below. |
+| M2 Android background capture | ✅ tag `m2` | Shizuku path on the real S24; keyguard boundary documented (reads need the phone unlocked; applies work locked) |
+| M3 crypto + pairing + identity | ✅ tag `m3` | live QR camera pairing Mac↔SM-S921U, SAS matching on both screens |
+| M4 LAN sync + mDNS | ✅ tag `m4` | live both-direction sync on the real LAN; JmDNS loopback-bind bug fixed |
+| M5 tailnet + hardening | ✅ tag `m5` | Gallery photo on LTE → Mac pasteboard in ~3 s over Tailscale, E2E-encrypted; endpoint refresh across the network switch |
+| M6 file transfer | ✅ tag `m6` | sha256-identical both directions incl. cold-start share; 55 MB APK self-delivery at scale |
+| Replay-on-connect | ✅ | offline phone clip → Mac ~2 s after link-up (lock-state-keyed harness) |
+| GUI status pass | ✅ | status-first screens both apps, verified by on-device screenshots |
+| M7 notification mirroring + reply | ✅ tag `m7` | phone notification → Mac ~2 s; desktop reply landed back through RemoteInput (ok=true, len asserted) |
+| M8 messages | 🟢 read path verified; tag `m8` after Eric's one live send | 30 threads / 15-message fetch ~2 s each; observer on the right URIs; radio send + new-text push ride Eric's first real text |
 
-**61 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK; `:desktopApp:createDistributable` produces a launchable macOS app image.
+**75 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.3.0/vc4); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
 ## M6 file transfer (2026-08-12) — built + emulator-verified
 
