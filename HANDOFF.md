@@ -139,7 +139,22 @@ copies keep appearing on the Mac today, it's closed.
   (`192-168-1-32.local.`, `Android_1MX8PLN1.local.`). A pre-fix loopback record can linger
   in Android's mDNS cache until TTL; harmless.
 - **CI verified green** on its first real run (the workflow had never executed).
-  `versionName 0.2.0`, suite at 63 tests.
+  `versionName 0.2.0`, suite at 66 tests.
+
+### LTE session (2026-08-12 evening) — blocked on phone Tailscale, and a gap found + fixed
+
+Eric switched the S24 to LTE and copied a photo. Nothing arrived, for two stacked reasons:
+
+1. **The phone's Tailscale is offline ("last seen 3 days ago")** — on LTE there is no path
+   to the Mac at all until Eric opens Tailscale on the phone and connects (an expired node
+   key needs a fresh sign-in, not a toggle). The m5 LTE gate stays open pending that.
+2. **Replay gap (now fixed):** even with a path, the copy predated the link — and clipsync
+   had no replay: capture broadcasts only to currently-connected peers, so an offline copy
+   was marooned forever. The engine now keeps the newest local capture in memory and
+   **replays it to each peer that registers**; both sides replay, receiver LWW keeps the
+   newest (SyncEngineReplayTest, 3 cases). The Mac runs the replay build; **the phone still
+   needs this APK** — install on next Wi-Fi/USB contact. Until then, a copy made while
+   linked syncs as always; the marooned photo can just be re-copied once the tailnet is up.
 
 ## On-device pairing run (2026-08-08) — VERIFIED
 
