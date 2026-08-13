@@ -21,6 +21,14 @@ sessions are logged newest-first below the table.
 
 **75 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.3.0/vc4); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
+**Fresh clone / new worktree: write `local.properties` first.** It is gitignored, so it never
+propagates — without it `:androidApp` dies at dependency resolution with "SDK location not found"
+(the other two gates never get to run under `--continue`, since it fails during configuration):
+
+```
+echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
+```
+
 ## M6 file transfer (2026-08-12) — built + emulator-verified
 
 Triggered by Eric: "implement" the LinkMyMac/LinkMyDroid pair (the $22.99 Android⇄Mac app from
