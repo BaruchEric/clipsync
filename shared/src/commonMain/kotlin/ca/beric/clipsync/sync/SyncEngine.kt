@@ -50,6 +50,16 @@ class SyncEngine(
     private var suppressedEcho: String? = null
     private var suppressedImageHash: String? = null
 
+    /** The newest locally captured value, replayed to each newly connected peer. */
+    private sealed interface LastLocal {
+        val version: ClipVersion
+    }
+
+    private class LastText(val text: String, override val version: ClipVersion) : LastLocal
+    private class LastImage(val bytes: ByteArray, val mime: String, override val version: ClipVersion) : LastLocal
+
+    private var lastLocal: LastLocal? = null
+
     /** A partially-received image transfer, keyed by its sealed-bytes hash. */
     private class Incoming(
         val fromDeviceId: String,
@@ -65,8 +75,23 @@ class SyncEngine(
 
     private val pendingImages = mutableMapOf<String, Incoming>()
 
-    suspend fun addPeer(peer: RemotePeer) = mutex.withLock {
-        peers[peer.deviceId] = peer
+    suspend fun addPeer(peer: RemotePeer) {
+        val replay = mutex.withLock {
+            peers[peer.deviceId] = peer
+            lastLocal
+        }
+        // Replay the newest local value to the peer that just (re)connected: a copy made
+        // while the link was down (network switch, LTE) would otherwise never sync — there
+        // is no queue. Both sides replay on connect; the receiver's LWW keeps the newest,
+        // so this converges instead of ping-ponging.
+        when (replay) {
+            is LastText -> {
+                val sealed = ClipsyncCrypto.seal(peer.perPairKey, replay.text.encodeToByteArray())
+                peer.send(ControlMessage.ClipUpdate.of(replay.version, "text", sealed))
+            }
+            is LastImage -> sendImageTo(peer, replay.bytes, replay.mime, replay.version)
+            null -> Unit
+        }
     }
 
     suspend fun removePeer(deviceId: String) = mutex.withLock {
@@ -92,6 +117,7 @@ class SyncEngine(
             }
             version = ClipVersion(deviceId, ++counter, nowMs)
             lww.recordLocal(version)
+            lastLocal = LastText(text, version)
             targets = peers.values.toList()
         }
         for (peer in targets) {
@@ -116,19 +142,23 @@ class SyncEngine(
             }
             version = ClipVersion(deviceId, ++counter, nowMs)
             lww.recordLocal(version)
+            lastLocal = LastImage(bytes, mime, version)
             targets = peers.values.toList()
         }
-        for (peer in targets) {
-            val sealed = ClipsyncCrypto.seal(peer.perPairKey, bytes)
-            val transferSha = ClipsyncCrypto.sha256(sealed) // ties the frames to the announcement
-            val transferShaHex = ClipsyncCrypto.toHex(transferSha)
-            val chunks = sealed.chunkedBy(CHUNK_BYTES)
-            peer.send(ControlMessage.ImageUpdate(version, ImageMeta(mime, bytes.size.toLong(), transferShaHex), chunks.size))
-            chunks.forEachIndexed { i, chunk ->
-                peer.sendChunk(ChunkFrame.encode(transferSha, i, chunks.size, chunk))
-            }
-        }
+        for (peer in targets) sendImageTo(peer, bytes, mime, version)
         return true
+    }
+
+    /** Seals and streams one image to one peer: announcement plus sealed chunks. */
+    private suspend fun sendImageTo(peer: RemotePeer, bytes: ByteArray, mime: String, version: ClipVersion) {
+        val sealed = ClipsyncCrypto.seal(peer.perPairKey, bytes)
+        val transferSha = ClipsyncCrypto.sha256(sealed) // ties the frames to the announcement
+        val transferShaHex = ClipsyncCrypto.toHex(transferSha)
+        val chunks = sealed.chunkedBy(CHUNK_BYTES)
+        peer.send(ControlMessage.ImageUpdate(version, ImageMeta(mime, bytes.size.toLong(), transferShaHex), chunks.size))
+        chunks.forEachIndexed { i, chunk ->
+            peer.sendChunk(ChunkFrame.encode(transferSha, i, chunks.size, chunk))
+        }
     }
 
     // --- Remote receive ---
