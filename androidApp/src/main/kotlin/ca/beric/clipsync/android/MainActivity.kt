@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -216,7 +217,9 @@ class MainActivity : ComponentActivity() {
         val entries by AppGraph.repo.observeHistory().collectAsState(initial = emptyList())
         MaterialTheme {
             Column(
-                Modifier.fillMaxSize().padding(16.dp),
+                // safeDrawingPadding: targetSdk 36 is edge-to-edge, so without it the header
+                // renders under the status bar.
+                Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 val connected by AppGraph.connectedPeers.collectAsState()
