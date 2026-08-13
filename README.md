@@ -42,6 +42,11 @@ clipsync uses **[Shizuku](https://shizuku.rikka.app/)**: a foreground service re
 clipboard through Shizuku's shell-uid binder, which is exempt from the focus check. You run
 Shizuku (via wireless debugging or root) and grant clipsync access once.
 
+One boundary (verified on Android 16): while the device is **locked**, clipboard *reads* return
+nothing even via the shell uid — capture resumes on unlock. In practice this doesn't matter:
+copying requires using the phone, so capture happens while it's unlocked. Incoming clips still
+*apply* while locked (writes aren't keyguard-gated), so Mac→phone keeps working.
+
 Distribution target is **F-Droid** (and sideloaded APKs) — not Google Play.
 
 ## Build & run

@@ -141,6 +141,36 @@ copies keep appearing on the Mac today, it's closed.
 - **CI verified green** on its first real run (the workflow had never executed).
   `versionName 0.2.0`, suite at 66 tests.
 
+### Replay-on-connect VERIFIED on-device (2026-08-12 19:01)
+
+With 0.2.1 on the phone and the keyguard understood, the lock-state-keyed harness
+(`scratchpad/replay-verify.sh` pattern: wait for `mInputRestricted=false` → kill desktop →
+plant clip → assert `capture … genuine=true` in logcat → relaunch desktop → assert pbpaste)
+passed on the first attempt: **a clip captured on the phone with zero peers connected arrived
+on the Mac ~2 s after the desktop relaunched** — replay held it as lastLocal and delivered on
+register. Eric's own hand-copied string had already verified the live phone→Mac path on 0.2.1
+minutes earlier. That closes the last open item from the LTE session: offline copies now
+survive to the next link on real hardware, both directions of the marooned-photo scenario.
+
+### Keyguard capture boundary (2026-08-12 18:55) — found while verifying 0.2.1 on-device
+
+After installing 0.2.1 over adb (wireless debugging re-enabled; trust survived, no re-pair),
+the new `set_text_clip` harness hook set the phone clipboard (`ok=true`) but nothing ever
+synced — no capture logs, healthy single TLS link, no exceptions, Shizuku binder live. The
+`debug_read_clip` hook pinned it in one shot: **`sig=null text=null` while
+`mInputRestricted=true mDreamingLockscreen=true`** — Android denies `getPrimaryClip` under
+keyguard **even to the shell uid**, while `setPrimaryClip` still succeeds. Every earlier
+success (16:12 grant test, 17:31 LTE photo) ran with Eric actively using the phone; every
+failure today ran against a locked phone on a desk. Not a regression — a platform boundary
+the 0.2.0 runs never crossed. Product impact ~none (copying implies unlocked; capture is at
+copy time; Mac→phone applies fine while locked) — but harness runs must keep the phone
+unlocked, and README now documents the asymmetry. New harness extras this exposed the need
+for: `--es set_text_clip <s>` (clipboard-as-another-app via Shizuku write, bypassing the
+applier so the engine treats it as a genuine capture) and `--es debug_read_clip 1` (one
+summarized read: signature + text length, never content). Capture emissions now log
+(`capture text len=… genuine=…`) — the whole pipeline was silent before, which is why this
+took bisection instead of one glance at logcat.
+
 ### Homecoming session (2026-08-12 18:20) — 0.2.1 delivered to the phone by clipsync itself
 
 The phone came back to the LAN (mDNS re-discovered it; Hello refreshed its stored endpoints

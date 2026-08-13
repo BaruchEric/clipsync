@@ -283,6 +283,39 @@ object AppGraph {
         return s?.setImageUri(Uri.parse(uriString)) ?: false
     }
 
+    /**
+     * Harness hook: put [text] on the system clipboard as if another app copied it (via
+     * Shizuku, not the applier — so the poller treats it as a genuine local capture).
+     */
+    suspend fun setTextClip(text: String): Boolean {
+        var s = shizuku
+        var waited = 0
+        while (s == null && waited < 100) {
+            delay(50)
+            s = shizuku
+            waited++
+        }
+        return s?.setText(text) ?: false
+    }
+
+    /**
+     * Harness hook: one Shizuku clipboard read, summarized (kind/length only, no content) —
+     * for bisecting capture failures (e.g. does the read see anything while the keyguard is up?).
+     */
+    suspend fun debugReadClip(): String {
+        var s = shizuku
+        var waited = 0
+        while (s == null && waited < 100) {
+            delay(50)
+            s = shizuku
+            waited++
+        }
+        if (s == null) return "shizuku=null"
+        val sig = s.clipSignature()
+        val text = s.readText()
+        return "sig=${sig?.toString(16)} text=${text?.let { "len=${it.length}" } ?: "null"}"
+    }
+
     /** Harness twin of [sendSharedFiles]: streams an app-readable filesystem path to peers. */
     suspend fun sendLocalFile(path: String): Boolean {
         var engine = fileEngine
@@ -370,12 +403,16 @@ object AppGraph {
                     val now = System.currentTimeMillis()
                     when (clip) {
                         // Record locally only for a genuine capture (engine returns false on echo).
-                        is Clip.Text ->
-                            if (engine.onLocalCapture(clip.text, now)) repo.record(LOCAL_DEVICE_ID, clip.text, now)
-                        is Clip.Image ->
-                            if (engine.onLocalImageCapture(clip.bytes, clip.mime, now)) {
-                                repo.recordImage(LOCAL_DEVICE_ID, clip.mime, clip.bytes.size, now)
-                            }
+                        is Clip.Text -> {
+                            val genuine = engine.onLocalCapture(clip.text, now)
+                            Log.i(TAG, "capture text len=${clip.text.length} genuine=$genuine")
+                            if (genuine) repo.record(LOCAL_DEVICE_ID, clip.text, now)
+                        }
+                        is Clip.Image -> {
+                            val genuine = engine.onLocalImageCapture(clip.bytes, clip.mime, now)
+                            Log.i(TAG, "capture image ${clip.mime} ${clip.bytes.size}B genuine=$genuine")
+                            if (genuine) repo.recordImage(LOCAL_DEVICE_ID, clip.mime, clip.bytes.size, now)
+                        }
                     }
                 }
         }

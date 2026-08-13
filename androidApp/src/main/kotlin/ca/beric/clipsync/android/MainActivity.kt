@@ -110,6 +110,15 @@ class MainActivity : ComponentActivity() {
                 Log.i("clipsyncShare", "set-image-clip uri=$uri ok=$ok")
             }
         }
+        intent?.getStringExtra("set_text_clip")?.let { text ->
+            AppGraph.scope.launch {
+                val ok = AppGraph.setTextClip(text)
+                Log.i("clipsyncShare", "set-text-clip len=${text.length} ok=$ok")
+            }
+        }
+        if (intent?.hasExtra("debug_read_clip") == true) {
+            AppGraph.scope.launch { Log.i("clipsyncShare", "debug-read ${AppGraph.debugReadClip()}") }
+        }
     }
 
     /** Share-sheet entry: stream the shared content to connected peers ("send to my Mac"). */
