@@ -121,6 +121,7 @@ fun main() {
         val fileEngine = FileTransferEngine(
             appScope,
             FolderFileSink(File(System.getProperty("user.home"), "Downloads/clipsync")),
+            log = { println("clipsync: $it") },
         )
         val manager = ConnectionManager(
             localDeviceId = identity.deviceId,
@@ -333,8 +334,9 @@ private fun formatBytes(bytes: Long): String = when {
 
 /**
  * Polls ~/.clipsync/send-file.txt: writing an absolute path there streams that file to the
- * connected peers. Headless-harness hook in the peer-payload.txt idiom — drag-and-drop and
- * the picker are the real UI; an on-device run needs a scriptable send with assertable logs.
+ * connected peers, and the file is deleted once consumed. Headless-harness hook in the
+ * peer-payload.txt idiom — drag-and-drop and the picker are the real UI; an on-device run
+ * needs a scriptable send with assertable logs.
  */
 private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine) {
     val file = File(File(System.getProperty("user.home"), ".clipsync"), "send-file.txt")
@@ -345,6 +347,9 @@ private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine)
             val text = runCatching { if (file.exists()) file.readText().trim() else null }.getOrNull()
             if (!text.isNullOrEmpty() && text != last) {
                 last = text
+                // Consume before acting: a restart used to re-send whatever was last queued,
+                // because the dedup var resets with the process.
+                runCatching { file.delete() }
                 val f = File(text)
                 if (f.isFile) {
                     println("clipsync: send-file start path=$text size=${f.length()}")

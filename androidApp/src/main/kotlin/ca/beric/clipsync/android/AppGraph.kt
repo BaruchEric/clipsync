@@ -123,7 +123,7 @@ object AppGraph {
                     notifyFileReceived(appContext, name)
                 },
             )
-            val files = FileTransferEngine(scope, MediaStoreFileSink(appContext))
+            val files = FileTransferEngine(scope, MediaStoreFileSink(appContext), log = { Log.i(TAG, it) })
             files.onFileReceived = { name, _ -> notifyFileReceived(appContext, name) }
             fileEngine = files
             launch { files.transfers.collect { _transfers.value = it } }

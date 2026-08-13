@@ -41,6 +41,7 @@ class FileTransferEngine(
     private val sink: FileSink,
     private val offerAckTimeoutMs: Long = 15_000,
     private val stallTimeoutMs: Long = 60_000,
+    private val log: (String) -> Unit = {},
 ) {
     private val mutex = Mutex()
     private val peers = mutableMapOf<String, RemotePeer>()
@@ -351,6 +352,11 @@ class FileTransferEngine(
 
     private fun upsertState(state: TransferState) {
         _transfers.value = (listOf(state) + _transfers.value.filterNot { it.id == state.id }).take(MAX_STATES)
+        if (state.status != TransferState.Status.ACTIVE) {
+            val dir = if (state.outbound) "send" else "recv"
+            val tail = state.detail?.let { " — $it" } ?: ""
+            log("file $dir ${state.status.name.lowercase()}: ${state.name} (${state.sizeBytes} B) peer=${state.peerDeviceId}$tail")
+        }
     }
 
     /** AAD binding a chunk to its transfer and position: id (32 bytes) ‖ index (u32 BE). */

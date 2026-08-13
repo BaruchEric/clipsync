@@ -141,6 +141,37 @@ copies keep appearing on the Mac today, it's closed.
 - **CI verified green** on its first real run (the workflow had never executed).
   `versionName 0.2.0`, suite at 66 tests.
 
+### Homecoming session (2026-08-12 18:20) — 0.2.1 delivered to the phone by clipsync itself
+
+The phone came back to the LAN (mDNS re-discovered it; Hello refreshed its stored endpoints
+back to `[192.168.1.45:47653]`), but **adb was unreachable**: wireless debugging turned itself
+off during the LTE excursion. Evidence, not guesswork: the phone still *advertises*
+`_adb-tls-connect` on 45129 (a known stale-advert quirk after a network switch) but the port
+answers RST, and a full TCP sweep of 1024–49999 finds exactly one open port — 47653, clipsync's
+own server. So the update APK went over **clipsync's own file transfer** instead:
+`clipsync-0.2.1.apk`, **55 MB in ~15 s** — the largest real transfer yet (previous record
+1.5 MB), windowed flow control exercised at scale (210 chunks, ack cadence held to the end).
+It sits in `Download/clipsync/` awaiting a tap-to-install (a consent step that stays Eric's).
+Shizuku's grant survives an update install (same debug signature); the sync service needs one
+app-open afterwards. Alongside two 0.2.0 copies from the same exercise — install **0.2.1**,
+then the folder can be emptied.
+
+Two gaps this exposed, both fixed and pushed:
+
+- **Sender success was silent.** Completion lived only in the transfers UI state; proving the
+  first 55 MB delivery took TCP byte counters (`nettop`: 55,121,360 B out, socket idle — full
+  payload can't leave without live acks, and the final ack only follows the receiver's sha256
+  verify + publish). The engine now logs every terminal transfer state (done/failed, both
+  directions) through an injected `log` — `println` on desktop, `Log.i` on Android. The very
+  next send printed `file send done: clipsync-0.2.1.apk (54839340 B) peer=633db…`.
+- **`send-file.txt` re-fired on restart.** The watcher's dedup var resets with the process, so
+  a desktop relaunch re-sent whatever was last queued (observed live: the relaunch re-sent
+  0.2.0 unprompted). The queue file is now deleted once consumed — at-most-once across
+  restarts.
+
+`versionName 0.2.1` / `versionCode 3`. Suite still 66 green; desktop runs the new build
+(log now at `build/desktop-run.log`).
+
 ### LTE session, part 2 (2026-08-12 17:31) — m5 gate MET
 
 Eric enabled Tailscale on the phone: tailnet answered at 17:28:38, link up at 17:29:08 with
