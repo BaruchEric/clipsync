@@ -1,18 +1,23 @@
 package ca.beric.clipsync.desktop
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -20,7 +25,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -43,6 +50,7 @@ import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.pairing.PairingManager
+import ca.beric.clipsync.pairing.Peer
 import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.DesktopClipboardApplier
@@ -194,15 +202,17 @@ fun main() {
         var windowVisible by remember { mutableStateOf(true) }
         val icon = remember { trayIcon() }
         val connected by boot.connectedPeers.collectAsState()
-        val status = if (connected.isEmpty()) "no peers connected" else "${connected.size} peer(s) connected"
+        val trayPeers = remember(connected) { peerStore.all() }
+        val status = statusLine(connected, trayPeers)
 
         Tray(
             icon = icon,
             tooltip = "clipsync (${boot.deviceName}) — $status",
             onAction = { windowVisible = true },
             menu = {
-                Item("Open history & pairing") { windowVisible = true }
+                Item(status, enabled = false) {}
                 Separator()
+                Item("Open clipsync") { windowVisible = true }
                 Item("Quit clipsync") { exitApplication() }
             },
         )
@@ -264,7 +274,17 @@ private suspend fun sendLocalFile(fileEngine: FileTransferEngine, file: File) {
     if (!fileEngine.sendFile(source)) println("clipsync: file send skipped — no peers connected")
 }
 
-/** Window content: pairing QR + SAS list, file sending/transfers, then clipboard history. */
+/** One status line shared by the tray, the window title, and the header chip. */
+private fun statusLine(connected: Set<String>, peers: List<Peer>): String {
+    val names = peers.filter { it.deviceId in connected }.map { it.deviceName }
+    return when {
+        names.isNotEmpty() -> "Connected to ${names.joinToString()}"
+        peers.isNotEmpty() -> "Waiting for ${peers.joinToString { it.deviceName }}"
+        else -> "Not paired yet"
+    }
+}
+
+/** Window content: device status first, then sending, activity, and pairing. */
 @Composable
 private fun DesktopScreen(
     repo: ClipRepository,
@@ -275,54 +295,119 @@ private fun DesktopScreen(
     onPickFiles: () -> Unit,
 ) {
     MaterialTheme {
-        Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Scan to pair a phone", style = MaterialTheme.typography.titleSmall)
-            Image(
-                bitmap = remember(myPayload) { qrImageBitmap(myPayload) },
-                contentDescription = "pairing QR code",
-                modifier = Modifier.size(180.dp),
-            )
-            // Recompute the paired list whenever the connected set changes (e.g. a new pairing).
-            val peers = remember(connected) { peerStore.all() }
-            if (peers.isNotEmpty()) {
-                Text(
-                    "Paired devices — these codes must match on both screens. If they don't, remove the peer.",
-                    style = MaterialTheme.typography.labelSmall,
+        // Recompute the paired list whenever the connected set changes (e.g. a new pairing).
+        val peers = remember(connected) { peerStore.all() }
+        val labelFor = remember(peers) {
+            { id: String ->
+                if (id == LOCAL_DEVICE_ID) "This Mac"
+                else peers.firstOrNull { it.deviceId == id }?.deviceName ?: id.take(8)
+            }
+        }
+        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("clipsync", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                StatusChip(connected.isNotEmpty(), statusLine(connected, peers))
+            }
+            if (peers.isEmpty()) {
+                Text("Scan this QR with the phone app to pair:", style = MaterialTheme.typography.labelMedium)
+                Image(
+                    bitmap = remember(myPayload) { qrImageBitmap(myPayload) },
+                    contentDescription = "pairing QR code",
+                    modifier = Modifier.size(180.dp),
                 )
+            } else {
                 peers.forEach { p ->
-                    Text(
-                        "${p.deviceName}: ${ClipsyncCrypto.shortAuthString(p.perPairKey)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    PeerRow(p.deviceName, ClipsyncCrypto.shortAuthString(p.perPairKey), p.deviceId in connected)
                 }
             }
             HorizontalDivider()
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onPickFiles, enabled = connected.isNotEmpty()) { Text("Send a file…") }
-                Text(
-                    "  or drop files on this window · received files: ~/Downloads/clipsync",
-                    style = MaterialTheme.typography.labelSmall,
-                )
+                Column {
+                    Text("or drop files on this window", style = MaterialTheme.typography.labelSmall)
+                    Text("received → ~/Downloads/clipsync", style = MaterialTheme.typography.labelSmall)
+                }
             }
             val transfers by fileEngine.transfers.collectAsState()
-            if (transfers.isNotEmpty()) {
-                transfers.take(4).forEach { t -> TransferRow(t) }
-                HorizontalDivider()
-            }
-            Box(Modifier.weight(1f)) { HistoryScreen(repo) }
+            transfers.take(4).forEach { t -> TransferRow(t, labelFor) }
+            HorizontalDivider()
+            Text("Activity", style = MaterialTheme.typography.titleSmall)
+            Box(Modifier.weight(1f)) { HistoryScreen(repo, labelFor) }
+            if (peers.isNotEmpty()) PairMoreFooter(myPayload)
         }
     }
 }
 
+private val ConnectedGreen = Color(0xFF2E7D32)
+private val OfflineGray = Color(0xFF8E8E93)
+
 @Composable
-private fun TransferRow(t: TransferState) {
-    val direction = if (t.outbound) "→ ${t.peerDeviceId.take(8)}" else "← ${t.peerDeviceId.take(8)}"
-    val detail = when (t.status) {
-        TransferState.Status.ACTIVE -> "${formatBytes(t.transferredBytes)} / ${formatBytes(t.sizeBytes)}"
-        TransferState.Status.DONE -> if (t.outbound) "sent" else t.detail ?: "received"
-        TransferState.Status.FAILED -> "failed: ${t.detail}"
+private fun StatusDot(on: Boolean) {
+    Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) ConnectedGreen else OfflineGray))
+}
+
+@Composable
+private fun StatusChip(on: Boolean, text: String) {
+    val tint = if (on) ConnectedGreen else OfflineGray
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(tint.copy(alpha = 0.14f))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        StatusDot(on)
+        Text(text, style = MaterialTheme.typography.labelMedium, color = tint)
     }
-    Text("$direction  ${t.name} — $detail", style = MaterialTheme.typography.labelSmall, maxLines = 2)
+}
+
+@Composable
+private fun PeerRow(name: String, sas: String, on: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatusDot(on)
+        Column {
+            Text(name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                (if (on) "Connected" else "Not connected — syncs on reconnect") + " · code $sas",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+/** Pairing stays reachable after the first pairing without leading the screen. */
+@Composable
+private fun PairMoreFooter(myPayload: String) {
+    var show by remember { mutableStateOf(false) }
+    TextButton(onClick = { show = !show }) { Text(if (show) "Hide pairing QR" else "Pair another device…") }
+    if (show) {
+        Image(
+            bitmap = remember(myPayload) { qrImageBitmap(myPayload) },
+            contentDescription = "pairing QR code",
+            modifier = Modifier.size(160.dp),
+        )
+    }
+}
+
+@Composable
+private fun TransferRow(t: TransferState, labelFor: (String) -> String) {
+    val direction = if (t.outbound) "→ ${labelFor(t.peerDeviceId)}" else "← ${labelFor(t.peerDeviceId)}"
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        val detail = when (t.status) {
+            TransferState.Status.ACTIVE -> "${formatBytes(t.transferredBytes)} / ${formatBytes(t.sizeBytes)}"
+            TransferState.Status.DONE -> if (t.outbound) "sent" else t.detail ?: "received"
+            TransferState.Status.FAILED -> "failed: ${t.detail}"
+        }
+        Text("$direction  ${t.name} — $detail", style = MaterialTheme.typography.labelSmall, maxLines = 2)
+        if (t.status == TransferState.Status.ACTIVE && t.sizeBytes > 0) {
+            val fraction = (t.transferredBytes.toFloat() / t.sizeBytes).coerceIn(0f, 1f)
+            Box(
+                Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
+                    .background(OfflineGray.copy(alpha = 0.25f)),
+            ) {
+                Box(Modifier.fillMaxWidth(fraction).height(4.dp).background(ConnectedGreen))
+            }
+        }
+    }
 }
 
 private fun formatBytes(bytes: Long): String = when {

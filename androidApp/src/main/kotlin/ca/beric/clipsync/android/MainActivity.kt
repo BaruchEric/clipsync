@@ -12,6 +12,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +21,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -35,12 +40,19 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import ca.beric.clipsync.R
 import ca.beric.clipsync.android.capture.SyncForegroundService
 import ca.beric.clipsync.core.ClipEntry
+import ca.beric.clipsync.core.LOCAL_DEVICE_ID
 import ca.beric.clipsync.crypto.ClipsyncCrypto
+import ca.beric.clipsync.pairing.Peer
+import ca.beric.clipsync.transfer.TransferState
+import java.text.SimpleDateFormat
+import java.util.Date
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
@@ -207,46 +219,32 @@ class MainActivity : ComponentActivity() {
                 Modifier.fillMaxSize().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text("clipsync", style = MaterialTheme.typography.headlineSmall)
                 val connected by AppGraph.connectedPeers.collectAsState()
-                Text(
-                    if (connected.isEmpty()) "No peers connected" else "${connected.size} peer(s) connected",
-                    style = MaterialTheme.typography.labelMedium,
-                )
+                val peers = remember(connected, tick) { AppGraph.peerStore.all() }
+                val labelFor = remember(peers) {
+                    { id: String ->
+                        if (id == LOCAL_DEVICE_ID) "This phone"
+                        else peers.firstOrNull { it.deviceId == id }?.deviceName ?: id.take(8)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "clipsync",
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatusChip(connected.isNotEmpty(), statusText(connected, peers))
+                }
+                peers.forEach { p ->
+                    PeerRow(p.deviceName, ClipsyncCrypto.shortAuthString(p.perPairKey), p.deviceId in connected)
+                }
 
                 Button(onClick = { launchScan() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Scan a device's QR to pair")
+                    Text(if (peers.isEmpty()) "Scan your computer's QR to pair" else "Scan a device's QR to pair")
                 }
 
                 val transfers by AppGraph.transfers.collectAsState()
-                if (transfers.isNotEmpty()) {
-                    Text("File transfers", style = MaterialTheme.typography.labelSmall)
-                    transfers.take(3).forEach { t ->
-                        val arrow = if (t.outbound) "→" else "←"
-                        val detail = when (t.status) {
-                            ca.beric.clipsync.transfer.TransferState.Status.ACTIVE ->
-                                "${t.transferredBytes / 1024} / ${t.sizeBytes / 1024} KB"
-                            ca.beric.clipsync.transfer.TransferState.Status.DONE ->
-                                if (t.outbound) "sent" else t.detail ?: "received"
-                            ca.beric.clipsync.transfer.TransferState.Status.FAILED -> "failed: ${t.detail}"
-                        }
-                        Text("$arrow ${t.name} — $detail", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-
-                val peers = remember(connected, tick) { AppGraph.peerStore.all() }
-                if (peers.isNotEmpty()) {
-                    Text(
-                        "Paired — these codes must match on both screens. If they don't, remove the peer.",
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    peers.forEach { p ->
-                        Text(
-                            "${p.deviceName}: ${ClipsyncCrypto.shortAuthString(p.perPairKey)}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
+                transfers.take(3).forEach { t -> TransferRow(t, labelFor) }
 
                 key(tick) {
                     when {
@@ -285,7 +283,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                HistoryList(entries)
+                Text("Activity", style = MaterialTheme.typography.titleSmall)
+                HistoryList(entries, labelFor)
             }
         }
     }
@@ -322,8 +321,84 @@ private fun DisclosureCard(onProceed: () -> Unit) {
     }
 }
 
+private fun statusText(connected: Set<String>, peers: List<Peer>): String {
+    val names = peers.filter { it.deviceId in connected }.map { it.deviceName }
+    return when {
+        names.isNotEmpty() -> "Connected to ${names.joinToString()}"
+        peers.isNotEmpty() -> "Waiting for ${peers.joinToString { it.deviceName }}"
+        else -> "Not paired yet"
+    }
+}
+
+private val ConnectedGreen = Color(0xFF2E7D32)
+private val OfflineGray = Color(0xFF8E8E93)
+
 @Composable
-private fun ColumnScope.HistoryList(entries: List<ClipEntry>) {
+private fun StatusDot(on: Boolean) {
+    Box(Modifier.size(9.dp).clip(CircleShape).background(if (on) ConnectedGreen else OfflineGray))
+}
+
+@Composable
+private fun StatusChip(on: Boolean, text: String) {
+    val tint = if (on) ConnectedGreen else OfflineGray
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(tint.copy(alpha = 0.14f))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        StatusDot(on)
+        Text(text, style = MaterialTheme.typography.labelMedium, color = tint)
+    }
+}
+
+@Composable
+private fun PeerRow(name: String, sas: String, on: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StatusDot(on)
+        Column {
+            Text(name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                (if (on) "Connected" else "Not connected — syncs on reconnect") + " · code $sas",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TransferRow(t: TransferState, labelFor: (String) -> String) {
+    val direction = if (t.outbound) "→ ${labelFor(t.peerDeviceId)}" else "← ${labelFor(t.peerDeviceId)}"
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        val detail = when (t.status) {
+            TransferState.Status.ACTIVE -> "${formatBytes(t.transferredBytes)} / ${formatBytes(t.sizeBytes)}"
+            TransferState.Status.DONE -> if (t.outbound) "sent" else t.detail ?: "received"
+            TransferState.Status.FAILED -> "failed: ${t.detail}"
+        }
+        Text("$direction  ${t.name} — $detail", style = MaterialTheme.typography.labelSmall, maxLines = 2)
+        if (t.status == TransferState.Status.ACTIVE && t.sizeBytes > 0) {
+            val fraction = (t.transferredBytes.toFloat() / t.sizeBytes).coerceIn(0f, 1f)
+            Box(
+                Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
+                    .background(OfflineGray.copy(alpha = 0.25f)),
+            ) {
+                Box(Modifier.fillMaxWidth(fraction).height(4.dp).background(ConnectedGreen))
+            }
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1 shl 30 -> "%.1f GB".format(bytes / (1 shl 30).toDouble())
+    bytes >= 1 shl 20 -> "%.1f MB".format(bytes / (1 shl 20).toDouble())
+    bytes >= 1 shl 10 -> "%.0f KB".format(bytes / (1 shl 10).toDouble())
+    else -> "$bytes B"
+}
+
+private val timeFormat = SimpleDateFormat("HH:mm")
+
+@Composable
+private fun ColumnScope.HistoryList(entries: List<ClipEntry>, labelFor: (String) -> String) {
     if (entries.isEmpty()) {
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text("History is empty. Copy something once capture is enabled.")
@@ -336,8 +411,16 @@ private fun ColumnScope.HistoryList(entries: List<ClipEntry>) {
             items(entries, key = ClipEntry::id) { entry ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp)) {
-                        Text(entry.content.take(200), style = MaterialTheme.typography.bodyMedium)
-                        Text(entry.deviceId, style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            if (entry.kind == "image") "🖼 ${entry.content.removePrefix("image: ")}"
+                            else entry.content.take(200),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 4,
+                        )
+                        Text(
+                            "${labelFor(entry.deviceId)} · ${timeFormat.format(Date(entry.createdAtMs))}",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
                     }
                 }
             }

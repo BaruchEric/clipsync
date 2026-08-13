@@ -141,6 +141,22 @@ copies keep appearing on the Mac today, it's closed.
 - **CI verified green** on its first real run (the workflow had never executed).
   `versionName 0.2.0`, suite at 66 tests.
 
+### GUI status pass (2026-08-12 19:20) — closing the visible gap vs LinkMyMac
+
+Eric named the next gap: phone↔desktop GUI status. Both screens went status-first with a
+shared look (per-platform code): a colored status chip in the header ("Connected to
+SM-S921U" / "Waiting for …" / "Not paired yet"), per-peer rows (status dot, device name,
+"Connected · code 773702" — SAS demoted to a detail), transfer rows with a real progress
+bar, and the history feed renamed Activity with attribution by device *name* ("This Mac" /
+"SM-S921U") plus HH:mm times and an image glyph for image entries. Desktop: the tray menu
+now carries the same status line, the window title too, and pairing moved behind a "Pair
+another device…" footer once at least one peer exists (the QR leads only on first run).
+Android keeps its actionable setup cards (Shizuku/notifications/battery) under the new
+header. Desktop verified by screenshot (window capture, two iterations — a wrapping hint
+fixed); the phone build is installed but its visual check is pending an unlock, since the
+activity renders behind the keyguard. The organic Activity feed during verification showed
+Eric's real copies syncing live — the M2 field check happening on its own.
+
 ### Replay-on-connect VERIFIED on-device (2026-08-12 19:01)
 
 With 0.2.1 on the phone and the keyguard understood, the lock-state-keyed harness

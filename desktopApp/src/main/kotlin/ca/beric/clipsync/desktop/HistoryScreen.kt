@@ -23,7 +23,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 
 @Composable
-fun HistoryScreen(repo: ClipRepository) {
+fun HistoryScreen(repo: ClipRepository, labelFor: (String) -> String = { it }) {
     val entries by repo.observeHistory().collectAsState(initial = emptyList())
     MaterialTheme {
         if (entries.isEmpty()) {
@@ -32,28 +32,28 @@ fun HistoryScreen(repo: ClipRepository) {
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(12.dp),
+                modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(entries, key = ClipEntry::id) { entry -> HistoryRow(entry) }
+                items(entries, key = ClipEntry::id) { entry -> HistoryRow(entry, labelFor) }
             }
         }
     }
 }
 
-private val timeFormat = SimpleDateFormat("HH:mm:ss")
+private val timeFormat = SimpleDateFormat("HH:mm")
 
 @Composable
-private fun HistoryRow(entry: ClipEntry) {
+private fun HistoryRow(entry: ClipEntry, labelFor: (String) -> String) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp)) {
             Text(
-                entry.content.take(200),
+                if (entry.kind == "image") "🖼 ${entry.content.removePrefix("image: ")}" else entry.content.take(200),
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 4,
             )
             Text(
-                "${entry.deviceId} · ${timeFormat.format(Date(entry.createdAtMs))}",
+                "${labelFor(entry.deviceId)} · ${timeFormat.format(Date(entry.createdAtMs))}",
                 style = MaterialTheme.typography.labelSmall,
             )
         }
