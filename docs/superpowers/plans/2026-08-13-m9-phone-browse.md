@@ -2460,11 +2460,21 @@ guard, and the failure it prevents is a delete hitting the wrong file.
 - `DEFERRED-QUESTIONS.md`: record the two decisions made inside this milestone — full write access chosen over read-only pull (Eric's call, 2026-08-13), and trash-first delete with no auto-purge.
 - The parity roadmap: change the "Photos / contacts / file-manager browse" row's verdict to note files+photos shipped in M9 and contacts still deliberately out.
 
-- [ ] **Step 6: Commit and tag**
+- [ ] **Step 6: Commit — but do NOT tag yet**
 
 ```bash
 git add -A
 git commit -m "feat: M9 phone file and photo browse — 0.4.0"
+```
+
+**The `m9` tag waits for Step 4.** Every other tag in this project means "verified on real
+hardware" — that is what `m1`–`m7` assert, and `m8` was deliberately left untagged pending one
+live SMS send. Tagging M9 before the on-device run would break that meaning, and it would be
+especially wrong here: nothing in this milestone's Android half has ever executed, and the
+desktop Files tab has never been seen by anyone, since the app is a menu-bar tray app whose
+window does not exist until its status item is clicked. Tag after the on-device session:
+
+```bash
 git tag m9
 ```
 
