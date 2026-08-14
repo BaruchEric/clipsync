@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -541,7 +542,17 @@ object AppGraph {
             }
             is MirrorEvent.FsQueryRoots, is MirrorEvent.FsQueryList, is MirrorEvent.FsPull,
             is MirrorEvent.FsPush, is MirrorEvent.FsDelete, is MirrorEvent.FsRename -> scope.launch(Dispatchers.IO) {
-                browseEngine?.onEvent(from, event)?.let { mirrorEngine?.send(from, it) }
+                val engine = browseEngine
+                val result = engine?.onEvent(from, event)
+                // Spec requires a MediaStore rescan after every mutation (line 150-151) so the
+                // phone's own gallery reflects it immediately; without this, a deleted photo
+                // stays visible in Google Photos until the next scan and reads as "delete
+                // didn't work". Rescanning the affected *directory* is enough and is cheaper to
+                // wire than threading exact touched paths back through BrowseEngine.
+                if (engine != null && result is MirrorEvent.FsResult && result.ok) {
+                    rescanAfterMutation(context, engine, event, result)
+                }
+                result?.let { mirrorEngine?.send(from, it) }
             }
             // Phone → desktop kinds arriving here would be another phone; nothing to do. The
             // rest are the browse *response* types this device only ever sends, never receives.
@@ -551,6 +562,30 @@ object AppGraph {
             is MirrorEvent.Thumbs, is MirrorEvent.FsResult,
             -> Unit
         }
+    }
+
+    /**
+     * Directories touched by a successful mutation, for [MediaScannerConnection.scanFile].
+     * Rename is same-directory only (spec), so the parent of the old path is also the parent of
+     * the new one — no need to read the new name back out of [result]. Push's directory is
+     * already the absolute path BrowseEngine put in [result].detail.
+     */
+    private fun rescanAfterMutation(
+        context: Context,
+        engine: BrowseEngine,
+        event: MirrorEvent,
+        result: MirrorEvent.FsResult,
+    ) {
+        val dirs = when (event) {
+            is MirrorEvent.FsDelete -> event.paths
+                .mapNotNull { engine.resolve(event.root, it.substringBeforeLast('/', "")) }
+                .distinct()
+            is MirrorEvent.FsRename ->
+                listOfNotNull(engine.resolve(event.root, event.path.substringBeforeLast('/', "")))
+            is MirrorEvent.FsPush -> listOfNotNull(result.detail.takeIf { it.isNotBlank() })
+            else -> emptyList()
+        }
+        if (dirs.isNotEmpty()) MediaScannerConnection.scanFile(context, dirs.toTypedArray(), null, null)
     }
 
     @Synchronized
