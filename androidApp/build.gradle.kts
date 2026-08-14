@@ -20,7 +20,10 @@ android {
     buildTypes {
         release { isMinifyEnabled = false }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        aidl = true
+    }
 
     // Netty (embedded TLS server) ships duplicate META-INF resources across its jars.
     packaging {
