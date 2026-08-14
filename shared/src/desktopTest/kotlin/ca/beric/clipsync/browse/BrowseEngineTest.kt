@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -47,6 +48,10 @@ class BrowseEngineTest {
         val e = engine(this)
         assertNull(e.resolve("r", "../.."))
         assertNull(e.resolve("r", "sub/../../etc"))
+        // Positive control: a real child still resolves, so the nulls above are confinement,
+        // not a blanket failure.
+        File(root, "sub").mkdirs()
+        assertEquals(File(root, "sub").canonicalPath, e.resolve("r", "sub"))
     }
 
     @Test
@@ -110,5 +115,46 @@ class BrowseEngineTest {
     fun anUnrelatedMirrorEventIsIgnored() = runBlocking {
         val e = engine(this)
         assertNull(e.onEvent("peer", MirrorEvent.SmsQueryThreads))
+    }
+
+    @Test
+    fun aSiblingSharingTheRootsNamePrefixIsRejected() {
+        // The classic startsWith bug: root /x/browse must not admit /x/browse-evil.
+        // Without the trailing separator in the prefix check, this test is what fails.
+        val parent = Files.createTempDirectory("clipsync-sibling").toFile()
+        val theRoot = File(parent, "browse").apply { mkdirs() }
+        val evil = File(parent, "browse-evil").apply { mkdirs() }
+        File(evil, "loot.txt").writeText("secret")
+        File(theRoot, "ok.txt").writeText("fine")
+        val e = BrowseEngine(
+            scope = this@BrowseEngineTest.let { CoroutineScope(EmptyCoroutineContext) },
+            bridge = JvmFileBridge(),
+            roots = listOf(BrowseRoot("r", "Root", theRoot.absolutePath)),
+            enabled = { true },
+            clock = { 1_700_000_000_000L },
+        )
+        assertNull(e.resolve("r", "../browse-evil/loot.txt"))
+        // Positive control: a real child still resolves, so the null above is confinement,
+        // not a blanket failure.
+        assertEquals(File(theRoot, "ok.txt").canonicalPath, e.resolve("r", "ok.txt"))
+    }
+
+    @Test
+    fun aRootThatCannotBeCanonicalizedRejectsEverything() {
+        // Guards the `bridge.canonical(root.path) ?: return null` line specifically: delete
+        // that elvis and substitute root.path, and this is the test that catches it.
+        val denying = object : FileBridge by JvmFileBridge() {
+            override fun canonical(path: String): String? = null
+        }
+        val e = BrowseEngine(
+            scope = CoroutineScope(EmptyCoroutineContext),
+            bridge = denying,
+            roots = listOf(BrowseRoot("r", "Root", "/tmp")),
+            enabled = { true },
+            clock = { 1_700_000_000_000L },
+        )
+        assertNull(e.resolve("r", ""))
+        assertNull(e.resolve("r", "anything"))
+        assertNull(e.confineAbsolute("/tmp/anything"))
     }
 }

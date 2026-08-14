@@ -52,6 +52,7 @@ class BrowseEngine(
      * the browse root — a client that sends one has a bug, and an error names it.
      */
     fun resolve(rootId: String, rel: String): String? {
+        if (!enabled()) return null
         val root = roots.firstOrNull { it.id == rootId } ?: return null
         val trimmed = rel.trim()
         if (trimmed.startsWith("/") || trimmed.startsWith("\\")) return null
@@ -65,6 +66,7 @@ class BrowseEngine(
 
     /** Confines an already-absolute path (used for an inbound push destination). */
     fun confineAbsolute(abs: String): String? {
+        if (!enabled()) return null
         val canon = bridge.canonical(abs) ?: return null
         return roots.firstOrNull { root ->
             val rootCanon = bridge.canonical(root.path) ?: return@firstOrNull false
@@ -76,7 +78,11 @@ class BrowseEngine(
         val abs = resolve(q.root, q.path) ?: return MirrorEvent.FsResult("list", false, "path rejected")
         val entries = bridge.list(abs)
             .filterNot { it.dir && it.name == TRASH_DIR }
-            .sortedWith(compareByDescending<ca.beric.clipsync.protocol.FsEntry> { it.dir }.thenBy { it.name.lowercase() })
+            .sortedWith(
+                compareByDescending<ca.beric.clipsync.protocol.FsEntry> { it.dir }
+                    .thenBy { it.name.lowercase() }
+                    .thenBy { it.name },
+            )
             .take(MAX_ENTRIES)
         return MirrorEvent.FsEntries(q.root, q.path, entries)
     }
