@@ -12,8 +12,15 @@ import java.io.File
  */
 class FileBridgeService : IFileBridge.Stub() {
 
+    // Capped here, BEFORE the Binder hop — BrowseEngine.MAX_ENTRIES (2000) caps the wire, but
+    // that check runs on the far side of this call. Binder's transaction buffer is ~1MB, and a
+    // DCIM/Camera or Download with 15-20k entries exceeds it: the throw is caught by
+    // ShizukuFileBridge.call{}'s fail-closed wrapper and answers an empty list, which the
+    // desktop renders as "This folder is empty" for a folder full of photos. A literal, not
+    // BrowseEngine.MAX_ENTRIES, so this service doesn't need to depend on :shared for one
+    // constant.
     override fun list(dir: String): Array<String> =
-        File(dir).listFiles()?.map { it.row() }?.toTypedArray() ?: emptyArray()
+        File(dir).listFiles()?.take(2000)?.map { it.row() }?.toTypedArray() ?: emptyArray()
 
     override fun stat(path: String): String? = File(path).takeIf { it.exists() }?.row()
 
