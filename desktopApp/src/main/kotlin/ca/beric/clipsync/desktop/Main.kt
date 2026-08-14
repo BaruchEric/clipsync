@@ -603,11 +603,23 @@ private fun FilesScreen(boot: Boot) {
     var grid by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<List<String>>(emptyList()) }
     var renaming by remember { mutableStateOf<String?>(null) }
-    // The most recent refusal reason from the phone, so empty states can name the real cause.
-    var lastRefusal by remember { mutableStateOf<String?>(null) }
+    // Refusals are kept PER OPERATION and cleared when that operation next succeeds. A single
+    // shared variable latches: a failed delete ("trash rejected") would sit there and then be
+    // offered as the reason a legitimately empty photo grid is empty — worse than a generic
+    // message, because it points the user at the wrong thing entirely.
+    var refusals by remember { mutableStateOf(emptyMap<String, String>()) }
     LaunchedEffect(Unit) {
-        boot.fsResults.collect { if (!it.ok) lastRefusal = it.detail.ifBlank { null } }
+        boot.fsResults.collect { r ->
+            refusals = if (r.ok) refusals - r.op else refusals + (r.op to r.detail.ifBlank { "refused" })
+        }
     }
+    // A successful roots/listing/media reply is not an FsResult, so clear those here instead.
+    LaunchedEffect(roots) { if (roots.isNotEmpty()) refusals = refusals - "roots" }
+    LaunchedEffect(listing) { if (listing != null) refusals = refusals - "list" }
+    LaunchedEffect(photos) { if (photos.isNotEmpty()) refusals = refusals - "media" - "thumbs" }
+    val browseRefusal = refusals["roots"] ?: refusals["list"]
+    val photoRefusal = refusals["media"] ?: refusals["thumbs"]
+    val actionRefusal = refusals["delete"] ?: refusals["rename"] ?: refusals["pull"] ?: refusals["push"]
 
     fun list(r: String, p: String) {
         root = r
@@ -651,7 +663,7 @@ private fun FilesScreen(boot: Boot) {
             // cannot tell those apart, and telling someone they have no photos when they
             // actually denied a permission sends them to the wrong settings screen.
             Text(
-                lastRefusal?.let { "The phone refused: $it." }
+                browseRefusal?.let { "The phone refused: $it." }
                     ?: "No storage offered yet.\nOn the phone, turn on \"Let a paired Mac browse my files\".",
                 Modifier.padding(top = 24.dp),
             )
@@ -662,22 +674,36 @@ private fun FilesScreen(boot: Boot) {
             // with browsing on and photos denied the phone still returns roots and only the grid
             // comes back empty. Without this the user sees a blank grid and no reason at all.
             Text(
-                lastRefusal?.let { "The phone refused: $it." } ?: "No photos on the phone yet.",
+                photoRefusal?.let { "The phone refused: $it." } ?: "No photos on the phone yet.",
                 Modifier.padding(top = 24.dp),
             )
         } else if (grid) {
             LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), modifier = Modifier.weight(1f)) {
                 gridItems(photos, key = { it.id }) { item ->
                     Column(Modifier.padding(4.dp)) {
-                        thumbs[item.id]?.let { b64 ->
+                        // Peer-supplied bytes. Malformed base64, or valid base64 that is not an
+                        // image, throws from the decoder — and an uncaught throw inside a grid
+                        // item during recomposition takes the window down. remember() is called
+                        // unconditionally so composition order stays stable across recompositions.
+                        val b64 = thumbs[item.id]
+                        val bitmap = remember(b64) {
+                            b64?.let {
+                                runCatching {
+                                    org.jetbrains.skia.Image
+                                        .makeFromEncoded(java.util.Base64.getDecoder().decode(it))
+                                        .toComposeImageBitmap()
+                                }.getOrNull()
+                            }
+                        }
+                        if (bitmap != null) {
                             Image(
-                                bitmap = org.jetbrains.skia.Image.makeFromEncoded(
-                                    java.util.Base64.getDecoder().decode(b64),
-                                ).toComposeImageBitmap(),
+                                bitmap = bitmap,
                                 contentDescription = item.name,
                                 modifier = Modifier.size(112.dp),
                             )
-                        } ?: Box(Modifier.size(112.dp))
+                        } else {
+                            Box(Modifier.size(112.dp))
+                        }
                         Text(item.name, maxLines = 1, style = MaterialTheme.typography.labelSmall)
                     }
                 }
@@ -686,14 +712,26 @@ private fun FilesScreen(boot: Boot) {
             if (path.isNotEmpty()) {
                 TextButton(onClick = { list(root, path.substringBeforeLast('/', "")) }) { Text("← ${path.ifEmpty { "/" }}") }
             }
-            LazyColumn(Modifier.weight(1f)) {
-                // Only render a listing that matches where we currently are. Replies are
-                // dispatched per-request on the phone's IO pool, so a slower reply for a
-                // directory we have navigated away from can arrive last — and acting on it
-                // would build paths from this path plus that directory's entry names, which
-                // for a delete could target a same-named file in the wrong folder.
-                val visible = listing?.takeIf { it.root == root && it.path == path }
-                items(visible?.entries.orEmpty(), key = { it.name }) { entry ->
+            // A refused delete or rename otherwise just closes its dialog, leaving a listing
+            // that looks unchanged and no way to tell "it failed" from "it worked invisibly".
+            actionRefusal?.let {
+                Text("Last action refused: $it.", Modifier.padding(vertical = 4.dp))
+            }
+            // Only render a listing that matches where we currently are. Replies are dispatched
+            // per-request on the phone's IO pool, so a slower reply for a directory we have
+            // navigated away from can arrive last — and acting on it would build paths from
+            // this path plus that directory's entry names, which for a delete could target a
+            // same-named file in the wrong folder.
+            val visible = listing?.takeIf { it.root == root && it.path == path }
+            if (visible == null) {
+                Text("Loading…", Modifier.padding(top = 24.dp))
+            } else if (visible.entries.isEmpty()) {
+                Text(
+                    browseRefusal?.let { "The phone refused: $it." } ?: "This folder is empty.",
+                    Modifier.padding(top = 24.dp),
+                )
+            } else LazyColumn(Modifier.weight(1f)) {
+                items(visible.entries, key = { it.name }) { entry ->
                     val child = if (path.isEmpty()) entry.name else "$path/${entry.name}"
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                         Text(if (entry.dir) "📁" else "📄", Modifier.padding(end = 6.dp))
