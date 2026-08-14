@@ -86,7 +86,9 @@ class MediaIndex(context: Context) {
 
         val PERMISSIONS: Array<String> =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+                // Images only. Requiring READ_MEDIA_VIDEO as well would make a user who grants
+                // Photos but denies Videos see an empty grid, for a query that never runs.
+                arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
             } else {
                 arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
