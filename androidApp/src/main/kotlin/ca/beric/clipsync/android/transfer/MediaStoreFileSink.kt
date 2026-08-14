@@ -20,7 +20,7 @@ class MediaStoreFileSink(context: Context) : FileSink {
 
     private val resolver = context.applicationContext.contentResolver
 
-    override fun begin(name: String, mime: String): PendingFile {
+    override fun begin(name: String, mime: String, dest: String): PendingFile {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, if ('/' in mime) mime else "application/octet-stream")

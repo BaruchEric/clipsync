@@ -117,18 +117,20 @@ class FileTransferEngine(
     // --- Sending ---
 
     /**
-     * Offers [source] to every connected peer and streams it. Returns false (doing nothing)
-     * when no peer is connected. Suspends until every per-peer send finished or failed;
-     * failures surface in [transfers], never as exceptions.
+     * Offers [source] to [toDeviceId], or to every connected peer when null, and streams it.
+     * Returns false (doing nothing) when no such peer is connected. [dest] asks the receiver
+     * to write into that absolute directory; empty means "your default".
      */
-    suspend fun sendFile(source: FileSource): Boolean {
-        val targets = mutex.withLock { peers.values.toList() }
+    suspend fun sendFile(source: FileSource, toDeviceId: String? = null, dest: String = ""): Boolean {
+        val targets = mutex.withLock {
+            if (toDeviceId == null) peers.values.toList() else listOfNotNull(peers[toDeviceId])
+        }
         if (targets.isEmpty()) return false
-        coroutineScope { targets.forEach { peer -> launch { sendToPeer(source, peer) } } }
+        coroutineScope { targets.forEach { peer -> launch { sendToPeer(source, peer, dest) } } }
         return true
     }
 
-    private suspend fun sendToPeer(source: FileSource, peer: RemotePeer) {
+    private suspend fun sendToPeer(source: FileSource, peer: RemotePeer, dest: String) {
         val idBytes = ClipsyncCrypto.randomBytes(TRANSFER_ID_BYTES)
         val id = ClipsyncCrypto.toHex(idBytes)
         val chunkCount = chunkCountFor(source.size)
@@ -139,7 +141,7 @@ class FileTransferEngine(
             // Hash first: the offer must carry the whole-file sha256 the receiver verifies,
             // so sending costs one extra sequential read pass before streaming starts.
             val sha = source.open().use { streamSha256(it) }
-            peer.send(ControlMessage.FileOffer(id, source.name, source.size, source.mime, sha, chunkCount))
+            peer.send(ControlMessage.FileOffer(id, source.name, source.size, source.mime, sha, chunkCount, dest))
             var acked = withTimeout(offerAckTimeoutMs) { state.acks.receive() }
             source.open().use { input ->
                 val buf = ByteArray(CHUNK_BYTES)
@@ -229,7 +231,7 @@ class FileTransferEngine(
             return
         }
         val name = sanitizeName(offer.name)
-        val pending = runCatching { sink.begin(name, offer.mime) }.getOrElse {
+        val pending = runCatching { sink.begin(name, offer.mime, offer.dest) }.getOrElse {
             runCatching { peer.send(ControlMessage.FileError(offer.id, "receiver storage error")) }
             return
         }

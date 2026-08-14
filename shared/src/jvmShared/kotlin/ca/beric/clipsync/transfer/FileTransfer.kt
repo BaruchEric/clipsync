@@ -19,8 +19,12 @@ class FileSource(
 
 /** Platform destination for received files (desktop: a folder; Android: MediaStore Downloads). */
 interface FileSink {
-    /** Begins a pending receive under [name] (already sanitized by the engine). */
-    fun begin(name: String, mime: String): PendingFile
+    /**
+     * Begins a pending receive under [name] (already sanitized by the engine). [dest] is the
+     * sender's requested absolute directory (M9 push) — implementations that cannot or must
+     * not honor it ignore it. The desktop always ignores it: a peer never steers a write here.
+     */
+    fun begin(name: String, mime: String, dest: String = ""): PendingFile
 }
 
 /** An in-progress received file: stream bytes in, then publish or discard. */
@@ -56,7 +60,7 @@ data class TransferState(
  */
 class FolderFileSink(private val dir: File) : FileSink {
 
-    override fun begin(name: String, mime: String): PendingFile {
+    override fun begin(name: String, mime: String, dest: String): PendingFile {
         dir.mkdirs()
         val temp = File.createTempFile(".clipsync-recv-", ".part", dir)
         val out = temp.outputStream().buffered()
