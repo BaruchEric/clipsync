@@ -67,8 +67,10 @@ shell's storage visibility. Verified 2026-08-13 against the resolved artifact:
 
 MediaStore is used **read-only**, for the photo grid's metadata and for
 `ContentResolver.loadThumbnail` (API 29+, cache-backed, far cheaper than decoding a 12 MP
-JPEG per tile). That costs one runtime permission card: `READ_MEDIA_IMAGES` + `READ_MEDIA_VIDEO`
-on API 33+, `READ_EXTERNAL_STORAGE` (`maxSdkVersion=32`) below. Every **mutation** — delete,
+JPEG per tile). That costs one runtime permission card: `READ_MEDIA_IMAGES` on API 33+,
+`READ_EXTERNAL_STORAGE` (`maxSdkVersion=32`) below. Images only — nothing queries video,
+and requesting an unused permission would undercut the same restraint that keeps
+`READ_CONTACTS` off this app's surface. Every **mutation** — delete,
 rename, and any receive that names a destination directory — goes through the Shizuku
 service, never MediaStore. One confined write path to audit, and it sidesteps
 `createDeleteRequest`'s system consent dialogs. Plain M6 receives (share-sheet sends, no
