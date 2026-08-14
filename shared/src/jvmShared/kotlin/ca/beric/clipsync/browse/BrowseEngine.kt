@@ -2,11 +2,13 @@ package ca.beric.clipsync.browse
 
 import ca.beric.clipsync.protocol.FsRoot
 import ca.beric.clipsync.protocol.MirrorEvent
+import ca.beric.clipsync.transfer.FileSource
 import ca.beric.clipsync.transfer.FileTransferEngine
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /** One browsable location on this device. [path] is absolute; [id] is what the wire carries. */
 data class BrowseRoot(val id: String, val label: String, val path: String)
@@ -47,7 +49,9 @@ class BrowseEngine(
             is MirrorEvent.FsQueryList -> onList(event)
             is MirrorEvent.FsDelete -> onDelete(event)
             is MirrorEvent.FsRename -> onRename(event)
-            else -> null // transfers arrive in Task 6
+            is MirrorEvent.FsPull -> onPull(fromDeviceId, event)
+            is MirrorEvent.FsPush -> onPush(event)
+            else -> null // media and thumbnails are answered by the platform layer
         }
     }
 
@@ -145,6 +149,32 @@ class BrowseEngine(
         if (!bridge.move(abs, target)) return MirrorEvent.FsResult("rename", false, "rename failed")
         log("browse rename: ${abs.substringAfterLast('/')} -> $name")
         return MirrorEvent.FsResult("rename", true, name)
+    }
+
+    /**
+     * Streams one file to the requester over the M6 engine. The answer is bytes, not an
+     * event, so this returns null on success. Note [FileSource.open] is invoked twice by the
+     * transfer engine (hash pass, then stream pass) — [FileBridge.open] must give a fresh
+     * stream each time.
+     */
+    private fun onPull(toDeviceId: String, req: MirrorEvent.FsPull): MirrorEvent? {
+        val engine = transfers ?: return MirrorEvent.FsResult("pull", false, "transfers unavailable")
+        val abs = resolve(req.root, req.path) ?: return MirrorEvent.FsResult("pull", false, "path rejected")
+        val stat = bridge.stat(abs) ?: return MirrorEvent.FsResult("pull", false, "not found")
+        if (stat.dir) return MirrorEvent.FsResult("pull", false, "not a file")
+        val source = FileSource(stat.name, stat.size, stat.mime) { bridge.open(abs) }
+        scope.launch {
+            if (!engine.sendFile(source, toDeviceId = toDeviceId)) log("browse pull: peer $toDeviceId gone")
+        }
+        log("browse pull: ${stat.name} (${stat.size} B) -> $toDeviceId")
+        return null
+    }
+
+    /** Confirms (and creates) a destination directory; the peer then sends with dest set. */
+    private fun onPush(req: MirrorEvent.FsPush): MirrorEvent {
+        val abs = resolve(req.root, req.dir) ?: return MirrorEvent.FsResult("push", false, "path rejected")
+        if (!bridge.mkdirs(abs)) return MirrorEvent.FsResult("push", false, "could not create $abs")
+        return MirrorEvent.FsResult("push", true, abs)
     }
 
     /** The op label for an FsResult, or null when this event isn't a browse request at all. */

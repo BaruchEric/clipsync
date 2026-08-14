@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -72,5 +73,16 @@ class JvmFileBridgeTest {
         assertTrue(bridge.move(target.absolutePath, moved.absolutePath))
         assertFalse(target.exists())
         assertTrue(moved.exists())
+    }
+
+    @Test
+    fun createRefusesToWriteThroughASymlink() {
+        val dir = Files.createTempDirectory("clipsync-nofollow").toFile()
+        val outside = File(Files.createTempDirectory("clipsync-target").toFile(), "victim.txt")
+        outside.writeText("original")
+        val planted = File(dir, "incoming.bin")
+        Files.createSymbolicLink(planted.toPath(), outside.toPath())
+        assertFailsWith<java.io.IOException> { JvmFileBridge().create(planted.absolutePath) }
+        assertEquals("original", outside.readText(), "a planted symlink redirected the write")
     }
 }

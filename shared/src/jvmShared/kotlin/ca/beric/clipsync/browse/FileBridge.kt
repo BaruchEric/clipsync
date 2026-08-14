@@ -5,6 +5,9 @@ import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.URLConnection
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
 
 /**
  * The only way [BrowseEngine] touches storage. Paths are absolute and already confined by the
@@ -25,6 +28,13 @@ interface FileBridge {
     fun stat(path: String): FsEntry?
     fun exists(path: String): Boolean
     fun open(path: String): InputStream
+
+    /**
+     * Opens [path] for writing a new file. Must refuse to create through a symlink and must
+     * refuse to overwrite an existing file: [path] doesn't exist at the moment the caller
+     * confines it, but a symlink planted in the window between that check and this call would
+     * otherwise be followed, redirecting the write anywhere the process can write.
+     */
     fun create(path: String): OutputStream
     fun move(from: String, to: String): Boolean
     fun delete(path: String): Boolean
@@ -46,7 +56,13 @@ class JvmFileBridge : FileBridge {
 
     override fun open(path: String): InputStream = File(path).inputStream().buffered()
 
-    override fun create(path: String): OutputStream = File(path).outputStream().buffered()
+    override fun create(path: String): OutputStream =
+        Files.newOutputStream(
+            File(path).toPath(),
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        ).buffered()
 
     override fun move(from: String, to: String): Boolean =
         runCatching { File(from).renameTo(File(to)) }.getOrDefault(false)
