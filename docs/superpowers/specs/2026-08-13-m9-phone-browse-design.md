@@ -164,7 +164,10 @@ A **Files** tab beside Activity · Notifications · Messages:
 - Dropping files onto the pane pushes them into the current directory.
 - Right-click → Delete (confirm dialog) / Rename (inline field).
 - Empty states that name the actual cause: not paired, peer offline, browsing not enabled on
-  the phone, permission not granted.
+  the phone, permission not granted. The phone distinguishes the last two for you — a refused
+  request answers `FsResult(ok = false)` whose `detail` is "browsing disabled" or "photo
+  permission not granted" — so the tab displays that detail rather than inferring a reason
+  from an empty list, which cannot tell "denied" apart from "you have no photos".
 
 ## Testing
 

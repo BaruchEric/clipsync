@@ -1934,19 +1934,26 @@ Imports to add: `android.os.Environment`, `ca.beric.clipsync.android.browse.Brow
 In `handleMirrorEvent`, add before the terminal `is MirrorEvent.NotifPosted, …` branch:
 
 ```kotlin
+            // Three outcomes, not two: "browsing off", "photos not granted", and real data.
+            // An empty MediaItems would collapse the middle case into "you have no photos",
+            // and the desktop's Files tab is specified to name the actual cause.
             is MirrorEvent.MediaQuery -> scope.launch {
-                val reply = if (!BrowsePrefs.enabled(context)) {
-                    MirrorEvent.FsResult("media", false, "browsing disabled")
-                } else {
-                    MirrorEvent.MediaItems(mediaIndex?.items(event.offset, event.limit).orEmpty())
+                val index = mediaIndex
+                val reply = when {
+                    !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("media", false, "browsing disabled")
+                    index == null || !index.hasPermission() ->
+                        MirrorEvent.FsResult("media", false, "photo permission not granted")
+                    else -> MirrorEvent.MediaItems(index.items(event.offset, event.limit))
                 }
                 mirrorEngine?.send(from, reply)
             }
             is MirrorEvent.ThumbQuery -> scope.launch {
-                val reply = if (!BrowsePrefs.enabled(context)) {
-                    MirrorEvent.FsResult("thumbs", false, "browsing disabled")
-                } else {
-                    MirrorEvent.Thumbs(mediaIndex?.thumbs(event.ids).orEmpty())
+                val index = mediaIndex
+                val reply = when {
+                    !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("thumbs", false, "browsing disabled")
+                    index == null || !index.hasPermission() ->
+                        MirrorEvent.FsResult("thumbs", false, "photo permission not granted")
+                    else -> MirrorEvent.Thumbs(index.thumbs(event.ids))
                 }
                 mirrorEngine?.send(from, reply)
             }
@@ -1956,7 +1963,14 @@ In `handleMirrorEvent`, add before the terminal `is MirrorEvent.NotifPosted, …
             }
 ```
 
-and extend the final ignore branch to include the desktop-bound replies so the `when` stays exhaustive:
+**Important — the ignore branch already lists all thirteen.** An earlier task made this `when`
+exhaustive by naming every browse subtype in the terminal ignore branch (that is what unbroke
+the Android build). So this step **moves** the eight request types out of that list into the
+real handlers above; it does not add duplicates. Kotlin would still compile with a type listed
+twice — the first matching branch wins — leaving the ignore entry silently unreachable, which
+is exactly the kind of thing that reads as working until someone edits branch order. After this
+step the ignore branch must name **only the five response types**, which are the ones the phone
+legitimately receives and does nothing with:
 
 ```kotlin
             is MirrorEvent.NotifPosted, is MirrorEvent.SmsThreads,
