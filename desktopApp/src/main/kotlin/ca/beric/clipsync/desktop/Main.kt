@@ -978,7 +978,7 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
             for (line in text.lines()) {
                 val parts = line.trim().split(" ", limit = 3)
                 if (parts[0] == "fs-push") {
-                    watchFsPush(scope, boot, parts)
+                    handleFsPush(scope, boot, parts)
                     continue
                 }
                 val event = when (parts[0]) {
@@ -1028,7 +1028,7 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
  * may itself contain spaces (a real folder name), and `localfile` is the final token since the
  * operator typing it can trivially choose one without a space.
  */
-private fun watchFsPush(scope: CoroutineScope, boot: Boot, parts: List<String>) {
+private fun handleFsPush(scope: CoroutineScope, boot: Boot, parts: List<String>) {
     if (parts.size != 3 || ' ' !in parts[2]) {
         println("clipsync: mirror-cmd unrecognized: fs-push ${parts.drop(1).joinToString(" ")}")
         return
