@@ -426,7 +426,7 @@ class JvmFileBridge : FileBridge {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :shared:desktopTest --tests '*JvmFileBridgeTest*'`
-Expected: PASS, 6 tests.
+Expected: PASS, 6 tests. (Task 6 later adds a seventh to this file.)
 
 - [ ] **Step 5: Commit**
 
@@ -1163,10 +1163,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BrowsePullPushTest {
@@ -1338,7 +1340,7 @@ Add, with `import ca.beric.clipsync.transfer.FileSource` and `import kotlinx.cor
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `./gradlew :shared:desktopTest --tests '*BrowsePullPushTest*'`
-Expected: PASS, 6 tests.
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Harden `create()` against a symlinked final component**
 
@@ -1354,7 +1356,7 @@ A push destination does not exist when `resolve()` checks it, so it cannot be a 
         ).buffered()
 ```
 
-with `import java.nio.file.Files`, `java.nio.file.LinkOption`, `java.nio.file.StandardOpenOption`. `CREATE_NEW` also makes "the file already exists" an error rather than a silent overwrite, which is what a receive path wants. Add the covering test:
+with `import java.nio.file.Files`, `java.nio.file.LinkOption`, `java.nio.file.StandardOpenOption`. **`CREATE_NEW` is the option that actually carries the guarantee** — POSIX specifies that `O_CREAT|O_EXCL` fails with `EEXIST` when the final component is a symlink, dangling or not (verified on this machine: `O_CREAT|O_EXCL` refused, plain `O_CREAT` followed the link). `NOFOLLOW_LINKS` is defense-in-depth for opens that are not exclusive-create. Keep both, and do not expect the covering test to distinguish them. Add the covering test:
 
 ```kotlin
     @Test
@@ -1374,7 +1376,7 @@ with `import java.nio.file.Files`, `java.nio.file.LinkOption`, `java.nio.file.St
 - [ ] **Step 6: Run the whole suite**
 
 Run: `./gradlew :shared:desktopTest`
-Expected: PASS. Total should now be 75 + 3 + 7 + 12 + 10 + 4 + 6 = 117, 1 skipped (Tasks 2 and 3 grew by their fix rounds; Task 4 gained the trash-addressability test).
+Expected: PASS. Total should now be 75 + 3 + 7 + 12 + 10 + 4 + 8 = 119, 1 skipped (Tasks 2 and 3 grew by their fix rounds; Task 4 gained the trash-addressability test).
 
 - [ ] **Step 7: Commit**
 
