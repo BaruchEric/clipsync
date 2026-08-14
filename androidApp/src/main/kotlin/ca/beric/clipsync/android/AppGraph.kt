@@ -9,14 +9,21 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.OpenableColumns
 import android.util.Log
+import ca.beric.clipsync.android.browse.BrowsePrefs
+import ca.beric.clipsync.android.browse.MediaIndex
+import ca.beric.clipsync.android.browse.ShizukuFileBridge
 import ca.beric.clipsync.android.capture.AndroidClipboardApplier
 import ca.beric.clipsync.android.capture.NotifMirrorService
 import ca.beric.clipsync.android.capture.ShizukuClipboard
 import ca.beric.clipsync.android.sms.SmsBridge
 import ca.beric.clipsync.android.capture.ShizukuClipboardSource
+import ca.beric.clipsync.android.transfer.DispatchingFileSink
 import ca.beric.clipsync.android.transfer.MediaStoreFileSink
+import ca.beric.clipsync.browse.BrowseEngine
+import ca.beric.clipsync.browse.BrowseRoot
 import ca.beric.clipsync.core.Clip
 import ca.beric.clipsync.core.ClipRepository
 import ca.beric.clipsync.core.ClipboardWatcher
@@ -57,6 +64,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import rikka.shizuku.Shizuku
 
 /**
  * Process-wide singletons and the Android sync wiring. Initialized from [ClipsyncApp]
@@ -98,6 +106,10 @@ object AppGraph {
 
     private var mirrorEngine: MirrorEngine? = null
 
+    private var browseEngine: BrowseEngine? = null
+    private var fileBridge: ShizukuFileBridge? = null
+    private var mediaIndex: MediaIndex? = null
+
     private var smsBridge: SmsBridge? = null
 
     private var smsObserverStarted = false
@@ -136,7 +148,38 @@ object AppGraph {
                     notifyFileReceived(appContext, name)
                 },
             )
-            val files = FileTransferEngine(scope, MediaStoreFileSink(appContext), log = { Log.i(TAG, it) })
+            val bridge = ShizukuFileBridge(appContext).also { it.bind(); fileBridge = it }
+            // Shizuku's user service dies whenever Shizuku restarts, which happens on every
+            // phone reboot. bind() at startup alone would leave browsing silently dead until
+            // the app is relaunched, so re-bind whenever Shizuku's binder comes back.
+            Shizuku.addBinderReceivedListener {
+                Log.i(TAG, "shizuku binder received; rebinding file bridge")
+                fileBridge?.bind()
+            }
+            val media = MediaIndex(appContext).also { mediaIndex = it }
+            val roots = listOf(
+                BrowseRoot("internal", "Internal storage", Environment.getExternalStorageDirectory().absolutePath),
+                BrowseRoot("download", "Download", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath),
+                BrowseRoot("documents", "Documents", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).absolutePath),
+                BrowseRoot("dcim", "Camera", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).absolutePath),
+                BrowseRoot("pictures", "Pictures", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).absolutePath),
+                BrowseRoot("movies", "Movies", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath),
+                BrowseRoot("music", "Music", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).absolutePath),
+            )
+            val browse = BrowseEngine(
+                scope = scope,
+                bridge = bridge,
+                roots = roots,
+                enabled = { BrowsePrefs.enabled(appContext) },
+                log = { Log.i(TAG, it) },
+            )
+            browseEngine = browse
+            val files = FileTransferEngine(
+                scope,
+                DispatchingFileSink(MediaStoreFileSink(appContext), bridge) { browse.confineAbsolute(it) },
+                log = { Log.i(TAG, it) },
+            )
+            browse.transfers = files
             files.onFileReceived = { name, _ -> notifyFileReceived(appContext, name) }
             fileEngine = files
             launch { files.transfers.collect { _transfers.value = it } }
@@ -453,19 +496,32 @@ object AppGraph {
                 mirrorEngine?.send(from, MirrorEvent.SmsSent(ok, event.to))
                 Log.i(TAG, "sms send ok=$ok len=${event.body.length}")
             }
-            // Phone → desktop kinds arriving here would be another phone; nothing to do.
-            // The Fs*/Media*/Thumb* request types (FsQueryRoots, FsQueryList, MediaQuery,
-            // ThumbQuery, FsPull, FsPush, FsDelete, FsRename) belong to a later task's real
-            // browse handlers; until then they're inert here like the other unhandled kinds.
+            is MirrorEvent.MediaQuery -> scope.launch {
+                val reply = if (!BrowsePrefs.enabled(context)) {
+                    MirrorEvent.FsResult("media", false, "browsing disabled")
+                } else {
+                    MirrorEvent.MediaItems(mediaIndex?.items(event.offset, event.limit).orEmpty())
+                }
+                mirrorEngine?.send(from, reply)
+            }
+            is MirrorEvent.ThumbQuery -> scope.launch {
+                val reply = if (!BrowsePrefs.enabled(context)) {
+                    MirrorEvent.FsResult("thumbs", false, "browsing disabled")
+                } else {
+                    MirrorEvent.Thumbs(mediaIndex?.thumbs(event.ids).orEmpty())
+                }
+                mirrorEngine?.send(from, reply)
+            }
+            is MirrorEvent.FsQueryRoots, is MirrorEvent.FsQueryList, is MirrorEvent.FsPull,
+            is MirrorEvent.FsPush, is MirrorEvent.FsDelete, is MirrorEvent.FsRename -> scope.launch {
+                browseEngine?.onEvent(from, event)?.let { mirrorEngine?.send(from, it) }
+            }
+            // Phone → desktop kinds arriving here would be another phone; nothing to do. The
+            // rest are the browse *response* types this device only ever sends, never receives.
             is MirrorEvent.NotifPosted, is MirrorEvent.SmsThreads,
             is MirrorEvent.SmsMessages, is MirrorEvent.SmsSent,
-            is MirrorEvent.FsQueryRoots, is MirrorEvent.FsRoots,
-            is MirrorEvent.FsQueryList, is MirrorEvent.FsEntries,
-            is MirrorEvent.MediaQuery, is MirrorEvent.MediaItems,
-            is MirrorEvent.ThumbQuery, is MirrorEvent.Thumbs,
-            is MirrorEvent.FsPull, is MirrorEvent.FsPush,
-            is MirrorEvent.FsDelete, is MirrorEvent.FsRename,
-            is MirrorEvent.FsResult,
+            is MirrorEvent.FsRoots, is MirrorEvent.FsEntries, is MirrorEvent.MediaItems,
+            is MirrorEvent.Thumbs, is MirrorEvent.FsResult,
             -> Unit
         }
     }
