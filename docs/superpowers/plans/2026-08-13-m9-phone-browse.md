@@ -16,6 +16,7 @@
 - Android: `minSdk = 29`, `targetSdk = 36`, `compileSdk = 36`. Distribution is F-Droid + sideload — **never** Google Play, so SMS/storage permissions are acceptable.
 - **No new Gradle dependencies.** `Shizuku.bindUserService` / `Shizuku$UserServiceArgs` are in `dev.rikka.shizuku:api` 13.1.5, already declared in `androidApp/build.gradle.kts`.
 - Shared test command: `./gradlew :shared:desktopTest`. Suite is at **75 tests, 1 skipped, 0 failures** before this milestone — it must never go down.
+- **Every task verifies `./gradlew :shared:desktopTest :androidApp:assembleDebug`, both.** Learned the hard way here: adding subtypes to the sealed `MirrorEvent` broke an exhaustive `when` in `AppGraph`, and four consecutive tasks passed a green shared suite over an Android app that would not compile. A green `:shared:desktopTest` says nothing about the consumers of a shared type.
 - libsodium (`ClipsyncCrypto`) native lib does not load in Android host-JVM unit tests. Any test touching crypto lives in `shared/src/desktopTest/`.
 - **A fresh worktree needs `local.properties` first**, or `:androidApp` dies during configuration: `echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties`
 - Wire compatibility is non-negotiable: a 0.3.x peer must keep full clipboard/file sync against a 0.4.0 peer. New `MirrorEvent` subtypes already decode to null and drop; new `FileOffer` fields must have defaults.
@@ -1158,8 +1159,11 @@ import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -1172,7 +1176,20 @@ class BrowsePullPushTest {
     /** Completed by whichever fake peer is offered a file — no sleeping, no flakes. */
     private val firstOffer = CompletableDeferred<Pair<String, ControlMessage.FileOffer>>()
 
-    private suspend fun engine(scope: CoroutineScope): BrowseEngine {
+    // A dedicated scope, NOT the test's own runBlocking scope. FileTransferEngine.init launches
+    // a stall watchdog (`while (isActive) { delay(...) }`) that never completes on its own, and
+    // BrowseEngine.onPull launches into this scope too. Passing `this` from inside runBlocking
+    // makes those children of the runBlocking coroutine, which waits for every child before
+    // returning — the test would hang forever. Mirrors FileTransferEngineTest's pattern.
+    private val scope = CoroutineScope(SupervisorJob())
+
+    @AfterTest
+    fun tearDown() {
+        scope.cancel()
+    }
+
+    private suspend fun engine(): BrowseEngine {
+        ClipsyncCrypto.ensureInitialized() // libsodium; sealing a chunk fails without it
         root = Files.createTempDirectory("clipsync-pull").toFile()
         val transfers = FileTransferEngine(
             scope,
@@ -1197,7 +1214,7 @@ class BrowsePullPushTest {
 
     @Test
     fun pullOffersTheFileToTheRequesterOnly() = runBlocking {
-        val e = engine(this)
+        val e = engine()
         File(root, "photo.jpg").writeText("jpegbytes")
         assertEquals(null, e.onEvent("mac", MirrorEvent.FsPull("r", "photo.jpg")))
         // sendFile is launched into the engine's scope; await the offer instead of sleeping.
@@ -1210,7 +1227,7 @@ class BrowsePullPushTest {
 
     @Test
     fun pullRefusesADirectory() = runBlocking {
-        val e = engine(this)
+        val e = engine()
         File(root, "album").mkdirs()
         val reply = e.onEvent("mac", MirrorEvent.FsPull("r", "album")) as MirrorEvent.FsResult
         assertFalse(reply.ok)
@@ -1219,7 +1236,7 @@ class BrowsePullPushTest {
 
     @Test
     fun pullRefusesAPathOutsideTheRoot() = runBlocking {
-        val e = engine(this)
+        val e = engine()
         val reply = e.onEvent("mac", MirrorEvent.FsPull("r", "../secret")) as MirrorEvent.FsResult
         assertFalse(reply.ok)
         assertEquals("path rejected", reply.detail)
@@ -1227,7 +1244,7 @@ class BrowsePullPushTest {
 
     @Test
     fun pullOfAMissingFileFails() = runBlocking {
-        val e = engine(this)
+        val e = engine()
         val reply = e.onEvent("mac", MirrorEvent.FsPull("r", "ghost.bin")) as MirrorEvent.FsResult
         assertFalse(reply.ok)
         assertEquals("not found", reply.detail)
@@ -1235,7 +1252,7 @@ class BrowsePullPushTest {
 
     @Test
     fun pushAnswersWithTheAbsoluteDestinationAndCreatesIt() = runBlocking {
-        val e = engine(this)
+        val e = engine()
         val reply = e.onEvent("mac", MirrorEvent.FsPush("r", "inbox")) as MirrorEvent.FsResult
         assertTrue(reply.ok, reply.detail)
         assertEquals(File(root, "inbox").canonicalPath, reply.detail)
@@ -1244,7 +1261,7 @@ class BrowsePullPushTest {
 
     @Test
     fun pushRefusesADirectoryOutsideTheRoot() = runBlocking {
-        val e = engine(this)
+        val e = engine()
         val reply = e.onEvent("mac", MirrorEvent.FsPush("r", "../elsewhere")) as MirrorEvent.FsResult
         assertFalse(reply.ok)
         assertEquals("path rejected", reply.detail)
