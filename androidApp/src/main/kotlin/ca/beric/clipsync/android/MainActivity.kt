@@ -399,13 +399,20 @@ private fun StatusCard(title: String, body: String, action: String, onClick: () 
 private fun BrowseCard(activity: ComponentActivity) {
     var on by remember { mutableStateOf(BrowsePrefs.enabled(activity)) }
     val askMedia = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    // Consent copy. Name the write capability explicitly: FsPush lets a paired Mac add
+    // files to this phone with no per-push confirmation, and "copy" alone reads as pulling
+    // files off. The off-state text is what someone reads *before* granting, so it carries
+    // the full disclosure. Avoid claiming trashed items "can be restored" — they are moved
+    // rather than erased, but no restore UI exists.
     StatusCard(
         "Let a paired Mac browse my files",
         if (on) {
-            "On. A paired Mac can browse, copy, rename, and trash files on this phone. " +
-                "Deleted items move to .clipsync-trash and can be restored."
+            "On. A paired Mac can browse this phone's files and photos, copy them off, add new " +
+                "ones, rename, and trash. Deleted items move to .clipsync-trash rather than " +
+                "being erased."
         } else {
-            "Off. Turn this on to browse this phone's photos and files from the desktop app."
+            "Off. Turn this on to let a paired Mac browse this phone's photos and files — and " +
+                "copy, add, rename, or trash them."
         },
         if (on) "Turn off" else "Turn on",
     ) {
