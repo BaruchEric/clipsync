@@ -27,6 +27,22 @@ class BrowseEngineMutationTest {
 
     private fun trash() = File(root, BrowseEngine.TRASH_DIR)
 
+    /** Two roots that nest, the way the real seven do: `internal` contains `camera`. */
+    private fun nestedEngine(scope: CoroutineScope): BrowseEngine {
+        root = Files.createTempDirectory("clipsync-mutate-nested").toFile()
+        File(root, "DCIM").mkdirs()
+        return BrowseEngine(
+            scope = scope,
+            bridge = JvmFileBridge(),
+            roots = listOf(
+                BrowseRoot("internal", "Internal", root.absolutePath),
+                BrowseRoot("camera", "Camera", File(root, "DCIM").absolutePath),
+            ),
+            enabled = { true },
+            clock = { 1_700_000_000_000L },
+        )
+    }
+
     @Test
     fun deleteMovesToTrashRatherThanUnlinking() = runBlocking {
         val e = engine(this)
@@ -107,6 +123,39 @@ class BrowseEngineMutationTest {
         assertEquals("trash rejected", reply.detail)
         assertTrue(File(root, "doc.txt").exists(), "the file must not have moved")
         assertEquals(0, outside.listFiles()!!.size, "nothing may land outside the root")
+    }
+
+    @Test
+    fun deleteRefusesAChildRootsOwnDirectoryReachedThroughTheParentRoot() = runBlocking {
+        // FsDelete(root="internal", paths=["DCIM"]) must not trash the whole camera root just
+        // because DCIM sits inside the internal root's own directory tree.
+        val e = nestedEngine(this)
+        File(File(root, "DCIM"), "IMG_0001.jpg").writeText("photo")
+        val reply = e.onEvent("peer", MirrorEvent.FsDelete("internal", listOf("DCIM"))) as MirrorEvent.FsResult
+        assertFalse(reply.ok)
+        assertEquals("path rejected", reply.detail)
+        assertTrue(File(root, "DCIM").exists(), "the child root's directory must survive")
+        assertTrue(File(File(root, "DCIM"), "IMG_0001.jpg").exists())
+    }
+
+    @Test
+    fun deleteStillWorksOnAnOrdinarySubdirectoryOfTheParentRoot() = runBlocking {
+        // Positive control: the new refusal must not overreach and block ordinary deletes.
+        val e = nestedEngine(this)
+        File(root, "Notes").mkdirs()
+        File(File(root, "Notes"), "todo.txt").writeText("buy milk")
+        val reply = e.onEvent("peer", MirrorEvent.FsDelete("internal", listOf("Notes"))) as MirrorEvent.FsResult
+        assertTrue(reply.ok, reply.detail)
+        assertFalse(File(root, "Notes").exists())
+    }
+
+    @Test
+    fun renameRefusesAChildRootsOwnDirectoryReachedThroughTheParentRoot() = runBlocking {
+        val e = nestedEngine(this)
+        val reply = e.onEvent("peer", MirrorEvent.FsRename("internal", "DCIM", "DCIM2")) as MirrorEvent.FsResult
+        assertFalse(reply.ok)
+        assertEquals("path rejected", reply.detail)
+        assertTrue(File(root, "DCIM").exists(), "the child root's directory must survive")
     }
 
     @Test

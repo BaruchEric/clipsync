@@ -83,6 +83,16 @@ class BrowseEngine(
         }?.let { canon }
     }
 
+    /**
+     * True when [abs] IS a declared root's own directory — not merely somewhere under it.
+     * Roots nest by design (`internal` is /storage/emulated/0; the other six sit inside it),
+     * so a request whose *requested* root is a parent can still resolve to a *different*
+     * root's mount point — `FsDelete(root = "internal", paths = ["DCIM"])` resolves to the
+     * `camera` root's own directory. Checking only the requested root's path leaves every
+     * nested root reachable, and swallowable, through its parent.
+     */
+    private fun isDeclaredRootPath(abs: String): Boolean = roots.any { bridge.canonical(it.path) == abs }
+
     private fun onList(q: MirrorEvent.FsQueryList): MirrorEvent {
         val abs = resolve(q.root, q.path) ?: return MirrorEvent.FsResult("list", false, "path rejected")
         val entries = bridge.list(abs)
@@ -113,7 +123,9 @@ class BrowseEngine(
         for (rel in req.paths) {
             val abs = resolve(req.root, rel)
                 ?: return MirrorEvent.FsResult("delete", false, "path rejected")
-            if (abs == rootPath || abs == trash || abs.startsWith("$trash/")) {
+            // isDeclaredRootPath subsumes the abs == rootPath case (the requested root is
+            // itself a declared root) as well as every nested root reachable from it.
+            if (abs == trash || abs.startsWith("$trash/") || isDeclaredRootPath(abs)) {
                 return MirrorEvent.FsResult("delete", false, "path rejected")
             }
             if (!bridge.mkdirs(trash)) return MirrorEvent.FsResult("delete", false, "could not open trash")
@@ -142,7 +154,9 @@ class BrowseEngine(
             return MirrorEvent.FsResult("rename", false, "invalid name")
         }
         val abs = resolve(req.root, req.path) ?: return MirrorEvent.FsResult("rename", false, "path rejected")
-        if (abs == resolve(req.root, "")) return MirrorEvent.FsResult("rename", false, "path rejected")
+        // Refuses renaming any declared root's own directory, not just the requested one — the
+        // same nesting hazard as onDelete above.
+        if (isDeclaredRootPath(abs)) return MirrorEvent.FsResult("rename", false, "path rejected")
         val target = "${abs.substringBeforeLast('/')}/$name"
         if (confineAbsolute(target) == null) return MirrorEvent.FsResult("rename", false, "path rejected")
         if (bridge.exists(target)) return MirrorEvent.FsResult("rename", false, "name already taken")
