@@ -2099,14 +2099,26 @@ In `Main.kt`, beside `smsThreads` / `smsMessages`, add:
         val mediaItems = MutableStateFlow(emptyList<MediaItem>())
         val thumbs = MutableStateFlow(emptyMap<Long, String>())
         val fsResults = MutableSharedFlow<MirrorEvent.FsResult>(extraBufferCapacity = 16)
+        // Monotonic "a reply arrived" counters. Needed because neither payload can carry that
+        // signal on its own: MediaItems(emptyList()) is a legitimate success that looks empty,
+        // and FsEntries is a data class, so re-listing an unchanged directory produces a value
+        // == the cached one, which MutableStateFlow conflates and never re-emits.
+        val fsEpoch = MutableStateFlow(0)
+        val mediaEpoch = MutableStateFlow(0)
 ```
 
 and in the `MirrorEngine` `onEvent` lambda, beside the existing `SmsThreads` branch:
 
 ```kotlin
                     is MirrorEvent.FsRoots -> fsRoots.value = event.roots
-                    is MirrorEvent.FsEntries -> fsEntries.value = event
-                    is MirrorEvent.MediaItems -> mediaItems.value = event.items
+                    is MirrorEvent.FsEntries -> {
+                        fsEntries.value = event
+                        fsEpoch.value += 1
+                    }
+                    is MirrorEvent.MediaItems -> {
+                        mediaItems.value = event.items
+                        mediaEpoch.value += 1
+                    }
                     is MirrorEvent.Thumbs -> thumbs.value = thumbs.value + event.jpegB64
                     is MirrorEvent.FsResult -> {
                         println("clipsync: fs ${event.op} ok=${event.ok} ${event.detail}")
@@ -2148,10 +2160,16 @@ private fun FilesScreen(boot: Boot) {
             refusals = if (r.ok) refusals - r.op else refusals + (r.op to r.detail.ifBlank { "refused" })
         }
     }
-    // A successful roots/listing/media reply is not an FsResult, so clear those here instead.
+    // A successful roots/listing/media reply is not an FsResult, so clear those here instead —
+    // keyed on the arrival counters, not on the payload. Keying on the payload got this wrong
+    // twice: an empty-but-successful photo library never cleared a stale "permission not
+    // granted", and re-listing an unchanged directory produced an equal FsEntries that
+    // StateFlow conflated away, so the clear never fired at all.
+    val fsEpoch by boot.fsEpoch.collectAsState()
+    val mediaEpoch by boot.mediaEpoch.collectAsState()
     LaunchedEffect(roots) { if (roots.isNotEmpty()) refusals = refusals - "roots" }
-    LaunchedEffect(listing) { if (listing != null) refusals = refusals - "list" }
-    LaunchedEffect(photos) { if (photos.isNotEmpty()) refusals = refusals - "media" - "thumbs" }
+    LaunchedEffect(fsEpoch) { if (fsEpoch > 0) refusals = refusals - "list" }
+    LaunchedEffect(mediaEpoch) { if (mediaEpoch > 0) refusals = refusals - "media" - "thumbs" }
     val browseRefusal = refusals["roots"] ?: refusals["list"]
     val photoRefusal = refusals["media"] ?: refusals["thumbs"]
     val actionRefusal = refusals["delete"] ?: refusals["rename"] ?: refusals["pull"] ?: refusals["push"]
