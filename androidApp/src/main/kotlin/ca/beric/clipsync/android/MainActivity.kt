@@ -16,7 +16,9 @@ import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,7 +45,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +56,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import ca.beric.clipsync.R
+import ca.beric.clipsync.android.browse.BrowsePrefs
+import ca.beric.clipsync.android.browse.MediaIndex
 import ca.beric.clipsync.android.capture.NotifMirrorService
 import ca.beric.clipsync.android.capture.SyncForegroundService
 import ca.beric.clipsync.android.capture.TestReplyReceiver
@@ -356,6 +362,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                    BrowseCard(this@MainActivity)
                 }
 
                 Text("Activity", style = MaterialTheme.typography.titleSmall)
@@ -380,6 +387,37 @@ private fun StatusCard(title: String, body: String, action: String, onClick: () 
             }
             Spacer(Modifier.padding(4.dp))
             Button(onClick = onClick) { Text(action) }
+        }
+    }
+}
+
+/**
+ * M9 consent: file browsing is off until this is switched on. Turning it on also asks for the
+ * read-only media permission the photo grid needs — one tap, both grants.
+ */
+@Composable
+private fun BrowseCard(activity: ComponentActivity) {
+    var on by remember { mutableStateOf(BrowsePrefs.enabled(activity)) }
+    val askMedia = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    StatusCard(
+        "Let a paired Mac browse my files",
+        if (on) {
+            "On. A paired Mac can browse, copy, rename, and trash files on this phone. " +
+                "Deleted items move to .clipsync-trash and can be restored."
+        } else {
+            "Off. Turn this on to browse this phone's photos and files from the desktop app."
+        },
+        if (on) "Turn off" else "Turn on",
+    ) {
+        val next = !on
+        BrowsePrefs.setEnabled(activity, next)
+        on = next
+        if (next) {
+            askMedia.launch(MediaIndex.PERMISSIONS)
+            // Bind the SHELL-uid bridge now. The bridge is only bound when browsing is on, so
+            // without this the first browse after enabling would fail until the app was
+            // relaunched.
+            AppGraph.ensureFileBridgeBound(activity)
         }
     }
 }
