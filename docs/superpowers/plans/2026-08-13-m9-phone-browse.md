@@ -1420,9 +1420,13 @@ In `androidApp/build.gradle.kts`, extend the existing `buildFeatures` block:
 package ca.beric.clipsync.android.browse;
 
 interface IFileBridge {
-    /** Tab-separated "name\tsize\tdir\tmtime" rows; empty array for a missing directory. */
+    /**
+     * Tab-separated "size\tdir\tmtime\tname" rows; empty array for a missing directory.
+     * The name is LAST on purpose: it is the only user-controlled field, and a tab inside it
+     * must not shift the others. Readers split with limit=4 so such a name survives intact.
+     */
     String[] list(String dir);
-    /** One "name\tsize\tdir\tmtime" row, or null when the path does not exist. */
+    /** One "size\tdir\tmtime\tname" row, or null when the path does not exist. */
     String stat(String path);
     boolean exists(String path);
     String canonical(String path);
@@ -1481,7 +1485,13 @@ class FileBridgeService : IFileBridge.Stub() {
             OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
             DEFAULT_FILE_MODE,
         )
-        ParcelFileDescriptor.dup(fd).also { Os.close(fd) }
+        // try/finally, not .also{}: if dup() itself throws (EMFILE/ENFILE), .also never runs
+        // and the raw fd leaks.
+        try {
+            ParcelFileDescriptor.dup(fd)
+        } finally {
+            Os.close(fd)
+        }
     }.getOrNull()
 
     override fun move(from: String, to: String): Boolean =
@@ -1491,8 +1501,9 @@ class FileBridgeService : IFileBridge.Stub() {
 
     override fun mkdirs(path: String): Boolean = File(path).let { it.isDirectory || it.mkdirs() }
 
+    /** size ‖ dir ‖ mtime ‖ name — name last so a tab inside it cannot shift the other fields. */
     private fun File.row(): String =
-        listOf(name, if (isDirectory) 0L else length(), isDirectory, lastModified()).joinToString("\t")
+        listOf(if (isDirectory) 0L else length(), isDirectory, lastModified(), name).joinToString("\t")
 
     private companion object {
         /** rw-rw---- : the shell uid writes, the media scanner's group reads. */
@@ -1557,7 +1568,8 @@ class ShizukuFileBridge(context: Context) : FileBridge {
             .onFailure { Log.w(TAG, "bindUserService failed: ${it.message}") }
     }
 
-    fun isReady(): Boolean = service != null
+    /** A bound service whose binder has already died is not ready — ping, don't just null-check. */
+    fun isReady(): Boolean = service != null && runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
     // Null when the service isn't bound. Echoing the input path back would hand BrowseEngine
     // an unresolved string to confine against — the same bypass the JVM bridge avoids.
@@ -1586,17 +1598,22 @@ class ShizukuFileBridge(context: Context) : FileBridge {
 
     override fun mkdirs(path: String): Boolean = service?.mkdirs(path) ?: false
 
-    /** "name\tsize\tdir\tmtime" — the service's wire row. */
+    /**
+     * "size\tdir\tmtime\tname" — the service's wire row. limit = 4 keeps a tab-containing
+     * filename intact in the final field instead of splitting it into a fifth part, which
+     * would drop the entry from the listing while the file itself stayed on disk.
+     */
     private fun parseRow(row: String): FsEntry? {
-        val parts = row.split('\t')
+        val parts = row.split('\t', limit = 4)
         if (parts.size != 4) return null
-        val dir = parts[2].toBoolean()
+        val dir = parts[1].toBoolean()
+        val name = parts[3]
         return FsEntry(
-            name = parts[0],
-            size = parts[1].toLongOrNull() ?: 0L,
+            name = name,
+            size = parts[0].toLongOrNull() ?: 0L,
             dir = dir,
-            mtimeMs = parts[3].toLongOrNull() ?: 0L,
-            mime = if (dir) "" else JvmFileBridge.guessMime(parts[0]),
+            mtimeMs = parts[2].toLongOrNull() ?: 0L,
+            mime = if (dir) "" else JvmFileBridge.guessMime(name),
         )
     }
 
@@ -1817,7 +1834,9 @@ class DispatchingFileSink(
     override fun begin(name: String, mime: String, dest: String): PendingFile {
         if (dest.isBlank()) return mediaStore.begin(name, mime)
         val dir = confine(dest) ?: throw IOException("destination rejected: $dest")
-        val temp = "$dir/.clipsync-recv-$name.part"
+        // Unique per receive: create() uses O_EXCL, so a fixed temp name left behind by an
+        // interrupted push would block every retry of that filename permanently.
+        val temp = "$dir/.clipsync-recv-${ClipsyncCrypto.toHex(ClipsyncCrypto.randomBytes(8))}.part"
         val target = claim(dir, name)
         val out = bridge.create(temp)
         return object : PendingFile {
@@ -1868,6 +1887,13 @@ Then, inside `startSync`, replace the `files` construction (currently `FileTrans
 
 ```kotlin
             val bridge = ShizukuFileBridge(appContext).also { it.bind(); fileBridge = it }
+            // Shizuku's user service dies whenever Shizuku restarts, which happens on every
+            // phone reboot. bind() at startup alone would leave browsing silently dead until
+            // the app is relaunched, so re-bind whenever Shizuku's binder comes back.
+            Shizuku.addBinderReceivedListener {
+                Log.i(TAG, "shizuku binder received; rebinding file bridge")
+                fileBridge?.bind()
+            }
             val media = MediaIndex(appContext).also { mediaIndex = it }
             val roots = listOf(
                 BrowseRoot("internal", "Internal storage", Environment.getExternalStorageDirectory().absolutePath),
