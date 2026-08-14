@@ -724,7 +724,13 @@ private fun FilesScreen(boot: Boot) {
             // same-named file in the wrong folder.
             val visible = listing?.takeIf { it.root == root && it.path == path }
             if (visible == null) {
-                Text("Loading…", Modifier.padding(top = 24.dp))
+                // A refused FsQueryList never produces a new FsEntries, so `visible` stays null
+                // forever — without this the pane would sit on "Loading…" indefinitely while the
+                // real reason ("browsing disabled") was already captured and had nowhere to go.
+                Text(
+                    browseRefusal?.let { "The phone refused: $it." } ?: "Loading…",
+                    Modifier.padding(top = 24.dp),
+                )
             } else if (visible.entries.isEmpty()) {
                 Text(
                     browseRefusal?.let { "The phone refused: $it." } ?: "This folder is empty.",
