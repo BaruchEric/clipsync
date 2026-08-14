@@ -1,9 +1,13 @@
 package ca.beric.clipsync.android.browse;
 
 interface IFileBridge {
-    /** Tab-separated "name\tsize\tdir\tmtime" rows; empty array for a missing directory. */
+    /**
+     * Tab-separated "size\tdir\tmtime\tname" rows; empty array for a missing directory.
+     * name is last because it is the only user-controlled field — a tab inside a filename
+     * stays intact in the final part instead of shifting the fields ahead of it.
+     */
     String[] list(String dir);
-    /** One "name\tsize\tdir\tmtime" row, or null when the path does not exist. */
+    /** One "size\tdir\tmtime\tname" row (see list()), or null when the path does not exist. */
     String stat(String path);
     boolean exists(String path);
     String canonical(String path);

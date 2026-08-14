@@ -40,7 +40,13 @@ class FileBridgeService : IFileBridge.Stub() {
             OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
             DEFAULT_FILE_MODE,
         )
-        ParcelFileDescriptor.dup(fd).also { Os.close(fd) }
+        // try/finally, not .also{}: if dup() itself throws (EMFILE/ENFILE), .also never runs
+        // and the raw fd leaks.
+        try {
+            ParcelFileDescriptor.dup(fd)
+        } finally {
+            Os.close(fd)
+        }
     }.getOrNull()
 
     override fun move(from: String, to: String): Boolean =
@@ -50,8 +56,9 @@ class FileBridgeService : IFileBridge.Stub() {
 
     override fun mkdirs(path: String): Boolean = File(path).let { it.isDirectory || it.mkdirs() }
 
+    /** size ‖ dir ‖ mtime ‖ name — name last so a tab inside it cannot shift the other fields. */
     private fun File.row(): String =
-        listOf(name, if (isDirectory) 0L else length(), isDirectory, lastModified()).joinToString("\t")
+        listOf(if (isDirectory) 0L else length(), isDirectory, lastModified(), name).joinToString("\t")
 
     private companion object {
         /** rw-rw---- : the shell uid writes, the media scanner's group reads. */

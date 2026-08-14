@@ -51,7 +51,8 @@ class ShizukuFileBridge(context: Context) : FileBridge {
             .onFailure { Log.w(TAG, "bindUserService failed: ${it.message}") }
     }
 
-    fun isReady(): Boolean = service != null
+    /** A bound service whose binder has already died is not ready — ping, don't just null-check. */
+    fun isReady(): Boolean = service != null && runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
     // Null when the service isn't bound, or when the call throws. Echoing the input path back
     // would hand BrowseEngine an unresolved string to confine against — the same bypass the
@@ -91,17 +92,22 @@ class ShizukuFileBridge(context: Context) : FileBridge {
         .onFailure { Log.w(TAG, "file bridge call failed: ${it.javaClass.simpleName}: ${it.message}") }
         .getOrNull()
 
-    /** "name\tsize\tdir\tmtime" — the service's wire row. */
+    /**
+     * "size\tdir\tmtime\tname" — the service's wire row. limit = 4 keeps a tab-containing
+     * filename intact in the final field instead of splitting it into a fifth part, which
+     * would drop the entry from the listing while the file itself stayed on disk.
+     */
     private fun parseRow(row: String): FsEntry? {
-        val parts = row.split('\t')
+        val parts = row.split('\t', limit = 4)
         if (parts.size != 4) return null
-        val dir = parts[2].toBoolean()
+        val dir = parts[1].toBoolean()
+        val name = parts[3]
         return FsEntry(
-            name = parts[0],
-            size = parts[1].toLongOrNull() ?: 0L,
+            name = name,
+            size = parts[0].toLongOrNull() ?: 0L,
             dir = dir,
-            mtimeMs = parts[3].toLongOrNull() ?: 0L,
-            mime = if (dir) "" else JvmFileBridge.guessMime(parts[0]),
+            mtimeMs = parts[2].toLongOrNull() ?: 0L,
+            mime = if (dir) "" else JvmFileBridge.guessMime(name),
         )
     }
 
