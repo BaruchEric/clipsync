@@ -496,19 +496,26 @@ object AppGraph {
                 mirrorEngine?.send(from, MirrorEvent.SmsSent(ok, event.to))
                 Log.i(TAG, "sms send ok=$ok len=${event.body.length}")
             }
+            // Three outcomes, not two: "browsing off", "photos not granted", and real data.
+            // An empty MediaItems would collapse the middle case into "you have no photos",
+            // and the desktop's Files tab is specified to name the actual cause.
             is MirrorEvent.MediaQuery -> scope.launch {
-                val reply = if (!BrowsePrefs.enabled(context)) {
-                    MirrorEvent.FsResult("media", false, "browsing disabled")
-                } else {
-                    MirrorEvent.MediaItems(mediaIndex?.items(event.offset, event.limit).orEmpty())
+                val index = mediaIndex
+                val reply = when {
+                    !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("media", false, "browsing disabled")
+                    index == null || !index.hasPermission() ->
+                        MirrorEvent.FsResult("media", false, "photo permission not granted")
+                    else -> MirrorEvent.MediaItems(index.items(event.offset, event.limit))
                 }
                 mirrorEngine?.send(from, reply)
             }
             is MirrorEvent.ThumbQuery -> scope.launch {
-                val reply = if (!BrowsePrefs.enabled(context)) {
-                    MirrorEvent.FsResult("thumbs", false, "browsing disabled")
-                } else {
-                    MirrorEvent.Thumbs(mediaIndex?.thumbs(event.ids).orEmpty())
+                val index = mediaIndex
+                val reply = when {
+                    !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("thumbs", false, "browsing disabled")
+                    index == null || !index.hasPermission() ->
+                        MirrorEvent.FsResult("thumbs", false, "photo permission not granted")
+                    else -> MirrorEvent.Thumbs(index.thumbs(event.ids))
                 }
                 mirrorEngine?.send(from, reply)
             }
