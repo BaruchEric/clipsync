@@ -192,7 +192,14 @@ object AppGraph {
             browseEngine = browse
             val files = FileTransferEngine(
                 scope,
-                DispatchingFileSink(MediaStoreFileSink(appContext), bridge) { browse.confineAbsolute(it) },
+                DispatchingFileSink(
+                    MediaStoreFileSink(appContext),
+                    bridge,
+                    confine = { browse.confineAbsolute(it) },
+                    // The moment a browse push actually lands at its final path — see
+                    // rescanAfterMutation's kdoc for why onPush's own FsResult can't drive this.
+                    onPublished = { target -> rescan(appContext, listOf(target)) },
+                ),
                 log = { Log.i(TAG, it) },
             )
             browse.transfers = files
@@ -548,9 +555,10 @@ object AppGraph {
                 // phone's own gallery reflects it immediately; without this, a deleted photo
                 // stays visible in Google Photos until the next scan and reads as "delete
                 // didn't work". Rescanning the affected *directory* is enough and is cheaper to
-                // wire than threading exact touched paths back through BrowseEngine.
+                // wire than threading exact touched paths back through BrowseEngine. Push is
+                // handled separately — see rescanAfterMutation's kdoc.
                 if (engine != null && result is MirrorEvent.FsResult && result.ok) {
-                    rescanAfterMutation(context, engine, event, result)
+                    rescanAfterMutation(context, engine, event)
                 }
                 result?.let { mirrorEngine?.send(from, it) }
             }
@@ -565,16 +573,20 @@ object AppGraph {
     }
 
     /**
-     * Directories touched by a successful mutation, for [MediaScannerConnection.scanFile].
+     * Directories touched by a successful delete/rename, for [MediaScannerConnection.scanFile].
      * Rename is same-directory only (spec), so the parent of the old path is also the parent of
-     * the new one — no need to read the new name back out of [result]. Push's directory is
-     * already the absolute path BrowseEngine put in [result].detail.
+     * the new one — no need to read the new name back out of [result].
+     *
+     * Push is deliberately absent here: `onPush`'s FsResult fires when the destination
+     * directory is merely confirmed/created, before any bytes arrive, so scanning
+     * [result].detail at that point would scan a directory that doesn't yet contain the file.
+     * Push is rescanned instead at [DispatchingFileSink]'s `onPublished` callback, the moment
+     * the received file is actually at its final path.
      */
     private fun rescanAfterMutation(
         context: Context,
         engine: BrowseEngine,
         event: MirrorEvent,
-        result: MirrorEvent.FsResult,
     ) {
         val dirs = when (event) {
             is MirrorEvent.FsDelete -> event.paths
@@ -582,10 +594,14 @@ object AppGraph {
                 .distinct()
             is MirrorEvent.FsRename ->
                 listOfNotNull(engine.resolve(event.root, event.path.substringBeforeLast('/', "")))
-            is MirrorEvent.FsPush -> listOfNotNull(result.detail.takeIf { it.isNotBlank() })
             else -> emptyList()
         }
-        if (dirs.isNotEmpty()) MediaScannerConnection.scanFile(context, dirs.toTypedArray(), null, null)
+        rescan(context, dirs)
+    }
+
+    /** Shared by [rescanAfterMutation] and the push-publish hook below. */
+    private fun rescan(context: Context, paths: List<String>) {
+        if (paths.isNotEmpty()) MediaScannerConnection.scanFile(context, paths.toTypedArray(), null, null)
     }
 
     @Synchronized

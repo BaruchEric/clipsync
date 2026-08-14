@@ -17,6 +17,13 @@ class DispatchingFileSink(
     private val mediaStore: FileSink,
     private val bridge: FileBridge,
     private val confine: (String) -> String?,
+    /**
+     * Called with the final absolute path once a dest-routed file is actually in place — the
+     * only place that knows that path. AppGraph uses this to rescan MediaStore so a pushed file
+     * shows up in the phone's own gallery; `onPush`'s own FsResult fires before this, when the
+     * destination directory is merely confirmed/created, so it cannot drive that rescan itself.
+     */
+    private val onPublished: (String) -> Unit = {},
 ) : FileSink {
 
     override fun begin(name: String, mime: String, dest: String): PendingFile {
@@ -36,6 +43,7 @@ class DispatchingFileSink(
                     bridge.delete(temp)
                     throw IOException("could not move received file into $target")
                 }
+                onPublished(target)
                 return target
             }
 
