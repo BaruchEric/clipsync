@@ -106,8 +106,13 @@ object AppGraph {
 
     private var mirrorEngine: MirrorEngine? = null
 
+    @Volatile
     private var browseEngine: BrowseEngine? = null
+
+    @Volatile
     private var fileBridge: ShizukuFileBridge? = null
+
+    @Volatile
     private var mediaIndex: MediaIndex? = null
 
     private var smsBridge: SmsBridge? = null
@@ -148,15 +153,25 @@ object AppGraph {
                     notifyFileReceived(appContext, name)
                 },
             )
-            val bridge = ShizukuFileBridge(appContext).also { it.bind(); fileBridge = it }
+            // Bind only if the user has actually consented. This spawns a SHELL-uid helper
+            // process — the app's first persistent one — and standing it up for someone who
+            // never turned browsing on is exactly what the toggle exists to prevent. The
+            // startup bind covers the already-consented case so the first request is ready;
+            // ensureFileBridgeBound() covers the moment consent is granted.
+            val bridge = ShizukuFileBridge(appContext).also {
+                fileBridge = it
+                if (BrowsePrefs.enabled(appContext)) it.bind()
+            }
             // Shizuku's user service dies whenever Shizuku restarts, which happens on every
             // phone reboot. bind() at startup alone would leave browsing silently dead until
             // the app is relaunched, so re-bind whenever Shizuku's binder comes back.
             Shizuku.addBinderReceivedListener {
-                Log.i(TAG, "shizuku binder received; rebinding file bridge")
-                fileBridge?.bind()
+                if (BrowsePrefs.enabled(appContext)) {
+                    Log.i(TAG, "shizuku binder received; rebinding file bridge")
+                    fileBridge?.bind()
+                }
             }
-            val media = MediaIndex(appContext).also { mediaIndex = it }
+            mediaIndex = MediaIndex(appContext)
             val roots = listOf(
                 BrowseRoot("internal", "Internal storage", Environment.getExternalStorageDirectory().absolutePath),
                 BrowseRoot("download", "Download", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath),
@@ -470,6 +485,11 @@ object AppGraph {
         startSmsObserverIfGranted()
     }
 
+    /** Called when the user turns browsing on: binds the SHELL-uid bridge now rather than at next launch. */
+    fun ensureFileBridgeBound(context: Context) {
+        if (BrowsePrefs.enabled(context)) fileBridge?.bind()
+    }
+
     /**
      * Inbound mirror traffic (desktop → phone). Runs on the transport reader, so every
      * branch dispatches to [scope] immediately.
@@ -499,7 +519,7 @@ object AppGraph {
             // Three outcomes, not two: "browsing off", "photos not granted", and real data.
             // An empty MediaItems would collapse the middle case into "you have no photos",
             // and the desktop's Files tab is specified to name the actual cause.
-            is MirrorEvent.MediaQuery -> scope.launch {
+            is MirrorEvent.MediaQuery -> scope.launch(Dispatchers.IO) {
                 val index = mediaIndex
                 val reply = when {
                     !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("media", false, "browsing disabled")
@@ -509,7 +529,7 @@ object AppGraph {
                 }
                 mirrorEngine?.send(from, reply)
             }
-            is MirrorEvent.ThumbQuery -> scope.launch {
+            is MirrorEvent.ThumbQuery -> scope.launch(Dispatchers.IO) {
                 val index = mediaIndex
                 val reply = when {
                     !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("thumbs", false, "browsing disabled")
@@ -520,7 +540,7 @@ object AppGraph {
                 mirrorEngine?.send(from, reply)
             }
             is MirrorEvent.FsQueryRoots, is MirrorEvent.FsQueryList, is MirrorEvent.FsPull,
-            is MirrorEvent.FsPush, is MirrorEvent.FsDelete, is MirrorEvent.FsRename -> scope.launch {
+            is MirrorEvent.FsPush, is MirrorEvent.FsDelete, is MirrorEvent.FsRename -> scope.launch(Dispatchers.IO) {
                 browseEngine?.onEvent(from, event)?.let { mirrorEngine?.send(from, it) }
             }
             // Phone → desktop kinds arriving here would be another phone; nothing to do. The
