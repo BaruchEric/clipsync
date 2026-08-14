@@ -13,8 +13,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +44,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.window.Tray
@@ -58,6 +65,8 @@ import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.mirror.MirrorEngine
+import ca.beric.clipsync.protocol.FsRoot
+import ca.beric.clipsync.protocol.MediaItem
 import ca.beric.clipsync.protocol.MirrorEvent
 import ca.beric.clipsync.protocol.SmsMessage
 import ca.beric.clipsync.protocol.SmsThread
@@ -152,6 +161,12 @@ fun main() {
         val notifPings = MutableSharedFlow<MirrorEvent.NotifPosted>(extraBufferCapacity = 16)
         val smsThreads = MutableStateFlow(emptyList<SmsThread>())
         val smsMessages = MutableStateFlow(mapOf<Long, List<SmsMessage>>())
+        // Phone file/photo browsing (M9).
+        val fsRoots = MutableStateFlow(emptyList<FsRoot>())
+        val fsEntries = MutableStateFlow<MirrorEvent.FsEntries?>(null)
+        val mediaItems = MutableStateFlow(emptyList<MediaItem>())
+        val thumbs = MutableStateFlow(emptyMap<Long, String>())
+        val fsResults = MutableSharedFlow<MirrorEvent.FsResult>(extraBufferCapacity = 16)
         val mirrorEngine = MirrorEngine(
             onEvent = { _, event ->
                 when (event) {
@@ -169,6 +184,14 @@ fun main() {
                         println("clipsync: sms thread ${event.threadId}: ${event.messages.size} messages")
                     }
                     is MirrorEvent.SmsSent -> println("clipsync: sms send ok=${event.ok}")
+                    is MirrorEvent.FsRoots -> fsRoots.value = event.roots
+                    is MirrorEvent.FsEntries -> fsEntries.value = event
+                    is MirrorEvent.MediaItems -> mediaItems.value = event.items
+                    is MirrorEvent.Thumbs -> thumbs.value = thumbs.value + event.jpegB64
+                    is MirrorEvent.FsResult -> {
+                        println("clipsync: fs ${event.op} ok=${event.ok} ${event.detail}")
+                        fsResults.tryEmit(event)
+                    }
                     else -> Unit // desktop → phone kinds have no meaning inbound
                 }
             },
@@ -225,6 +248,7 @@ fun main() {
         Boot(
             engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload,
             mirrorEngine, phoneNotifs, notifPings, smsThreads, smsMessages,
+            fsRoots, fsEntries, mediaItems, thumbs, fsResults,
         )
     }
 
@@ -329,6 +353,11 @@ private class Boot(
     val notifPings: MutableSharedFlow<MirrorEvent.NotifPosted>,
     val smsThreads: StateFlow<List<SmsThread>>,
     val smsMessages: StateFlow<Map<Long, List<SmsMessage>>>,
+    val fsRoots: StateFlow<List<FsRoot>>,
+    val fsEntries: StateFlow<MirrorEvent.FsEntries?>,
+    val mediaItems: StateFlow<List<MediaItem>>,
+    val thumbs: StateFlow<Map<Long, String>>,
+    val fsResults: MutableSharedFlow<MirrorEvent.FsResult>,
 )
 
 /** Streams [file] to every connected peer; logs instead of throwing (UI shows the state). */
@@ -397,7 +426,7 @@ private fun DesktopScreen(
             HorizontalDivider()
             var tab by remember { mutableStateOf("Activity") }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf("Activity", "Notifications", "Messages").forEach { name ->
+                listOf("Activity", "Notifications", "Messages", "Files").forEach { name ->
                     TextButton(onClick = { tab = name }) {
                         Text(if (tab == name) "• $name" else name, style = MaterialTheme.typography.labelLarge)
                     }
@@ -407,6 +436,7 @@ private fun DesktopScreen(
                 when (tab) {
                     "Notifications" -> NotificationsPane(boot)
                     "Messages" -> MessagesPane(boot)
+                    "Files" -> FilesScreen(boot)
                     else -> HistoryScreen(repo, labelFor)
                 }
             }
@@ -553,6 +583,148 @@ private fun MessagesPane(boot: Boot) {
                 ) { Text("Send") }
             }
         }
+    }
+}
+
+/**
+ * Browse the phone (M9). Two views over one protocol: a folder tree and a photo grid.
+ * Destructive actions confirm first, and the phone moves deletions to a trash folder, so a
+ * mis-click costs a restore rather than a photo.
+ */
+@Composable
+private fun FilesScreen(boot: Boot) {
+    val scope = rememberCoroutineScope()
+    val roots by boot.fsRoots.collectAsState()
+    val listing by boot.fsEntries.collectAsState()
+    val photos by boot.mediaItems.collectAsState()
+    val thumbs by boot.thumbs.collectAsState()
+    var root by remember { mutableStateOf("") }
+    var path by remember { mutableStateOf("") }
+    var grid by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf<List<String>>(emptyList()) }
+    var renaming by remember { mutableStateOf<String?>(null) }
+    // The most recent refusal reason from the phone, so empty states can name the real cause.
+    var lastRefusal by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        boot.fsResults.collect { if (!it.ok) lastRefusal = it.detail.ifBlank { null } }
+    }
+
+    fun list(r: String, p: String) {
+        root = r
+        path = p
+        scope.launch { boot.mirror.send(null, MirrorEvent.FsQueryList(r, p)) }
+    }
+
+    LaunchedEffect(Unit) { boot.mirror.send(null, MirrorEvent.FsQueryRoots) }
+    LaunchedEffect(roots) { if (root.isEmpty() && roots.isNotEmpty()) list(roots.first().id, "") }
+    LaunchedEffect(grid) {
+        if (grid) boot.mirror.send(null, MirrorEvent.MediaQuery(0, 60))
+    }
+    LaunchedEffect(photos) {
+        val missing = photos.map { it.id }.filterNot { thumbs.containsKey(it) }.take(24)
+        if (missing.isNotEmpty()) boot.mirror.send(null, MirrorEvent.ThumbQuery(missing))
+    }
+
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            roots.forEach { r ->
+                TextButton(onClick = { list(r.id, "") }) {
+                    Text(r.label, fontWeight = if (r.id == root) FontWeight.Bold else FontWeight.Normal)
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { grid = !grid }) { Text(if (grid) "Files" else "Photos") }
+        }
+        if (roots.isEmpty()) {
+            // Say why, don't guess. The phone distinguishes "browsing disabled" from "photo
+            // permission not granted" and sends the reason in FsResult.detail; an empty list
+            // cannot tell those apart, and telling someone they have no photos when they
+            // actually denied a permission sends them to the wrong settings screen.
+            Text(
+                lastRefusal?.let { "The phone refused: $it." }
+                    ?: "No storage offered yet.\nOn the phone, turn on \"Let a paired Mac browse my files\".",
+                Modifier.padding(top = 24.dp),
+            )
+            return@Column
+        }
+        if (grid) {
+            LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), modifier = Modifier.weight(1f)) {
+                gridItems(photos, key = { it.id }) { item ->
+                    Column(Modifier.padding(4.dp)) {
+                        thumbs[item.id]?.let { b64 ->
+                            Image(
+                                bitmap = org.jetbrains.skia.Image.makeFromEncoded(
+                                    java.util.Base64.getDecoder().decode(b64),
+                                ).toComposeImageBitmap(),
+                                contentDescription = item.name,
+                                modifier = Modifier.size(112.dp),
+                            )
+                        } ?: Box(Modifier.size(112.dp))
+                        Text(item.name, maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        } else {
+            if (path.isNotEmpty()) {
+                TextButton(onClick = { list(root, path.substringBeforeLast('/', "")) }) { Text("← ${path.ifEmpty { "/" }}") }
+            }
+            LazyColumn(Modifier.weight(1f)) {
+                items(listing?.entries.orEmpty(), key = { it.name }) { entry ->
+                    val child = if (path.isEmpty()) entry.name else "$path/${entry.name}"
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                        Text(if (entry.dir) "📁" else "📄", Modifier.padding(end = 6.dp))
+                        Text(
+                            entry.name,
+                            Modifier.weight(1f).clickable {
+                                if (entry.dir) list(root, child)
+                                else scope.launch { boot.mirror.send(null, MirrorEvent.FsPull(root, child)) }
+                            },
+                        )
+                        if (!entry.dir) Text("${entry.size / 1024} KB", Modifier.padding(end = 8.dp))
+                        TextButton(onClick = { renaming = child }) { Text("Rename") }
+                        TextButton(onClick = { confirm = listOf(child) }) { Text("Delete") }
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirm.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { confirm = emptyList() },
+            title = { Text("Move ${confirm.size} item(s) to the phone's trash?") },
+            text = { Text(confirm.joinToString("\n").take(400) + "\n\nRecoverable from .clipsync-trash on the phone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val paths = confirm
+                    confirm = emptyList()
+                    scope.launch {
+                        boot.mirror.send(null, MirrorEvent.FsDelete(root, paths))
+                        boot.mirror.send(null, MirrorEvent.FsQueryList(root, path))
+                    }
+                }) { Text("Move to trash") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = emptyList() }) { Text("Cancel") } },
+        )
+    }
+
+    renaming?.let { target ->
+        var name by remember(target) { mutableStateOf(target.substringAfterLast('/')) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("Rename") },
+            text = { OutlinedTextField(name, { name = it }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = {
+                    renaming = null
+                    scope.launch {
+                        boot.mirror.send(null, MirrorEvent.FsRename(root, target, name))
+                        boot.mirror.send(null, MirrorEvent.FsQueryList(root, path))
+                    }
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
+        )
     }
 }
 
