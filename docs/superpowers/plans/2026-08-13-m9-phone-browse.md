@@ -312,6 +312,19 @@ class JvmFileBridgeTest {
     }
 
     @Test
+    fun canonicalReturnsNullWhenResolutionFails() {
+        // A symlink cycle makes canonicalPath throw (ELOOP). Returning an unresolved path here
+        // would be a confinement bypass: BrowseEngine compares canonical paths, and a raw
+        // string can start with the root prefix while still containing "..".
+        val dir = tempDir()
+        val a = File(dir, "a")
+        val b = File(dir, "b")
+        Files.createSymbolicLink(a.toPath(), b.toPath())
+        Files.createSymbolicLink(b.toPath(), a.toPath())
+        assertNull(bridge.canonical(File(a, "child.txt").absolutePath))
+    }
+
+    @Test
     fun moveRenamesAndCreateWritesThroughMkdirs() {
         val dir = tempDir()
         assertTrue(bridge.mkdirs(File(dir, "deep/er").absolutePath))
@@ -350,7 +363,13 @@ import java.net.URLConnection
  * [open] MUST be re-invokable: FileTransferEngine reads a source twice (hash, then stream).
  */
 interface FileBridge {
-    fun canonical(path: String): String
+    /**
+     * Fully resolved path — symlinks and `..` collapsed — or **null when resolution failed**.
+     * Null is load-bearing: [BrowseEngine] confines by comparing canonical paths, and an
+     * unresolved path is not safely comparable (a raw string can still start with the root
+     * prefix while containing `..`). Callers must treat null as deny, never as fall-through.
+     */
+    fun canonical(path: String): String?
     fun list(dir: String): List<FsEntry>
     fun stat(path: String): FsEntry?
     fun exists(path: String): Boolean
@@ -364,8 +383,8 @@ interface FileBridge {
 /** Plain java.io implementation: the desktop's own filesystem, and every unit test. */
 class JvmFileBridge : FileBridge {
 
-    override fun canonical(path: String): String =
-        runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+    override fun canonical(path: String): String? =
+        runCatching { File(path).canonicalPath }.getOrNull()
 
     override fun list(dir: String): List<FsEntry> =
         File(dir).listFiles()?.map { it.toEntry() } ?: emptyList()
@@ -404,7 +423,7 @@ class JvmFileBridge : FileBridge {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `./gradlew :shared:desktopTest --tests '*JvmFileBridgeTest*'`
-Expected: PASS, 5 tests.
+Expected: PASS, 6 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -612,17 +631,19 @@ class BrowseEngine(
         val root = roots.firstOrNull { it.id == rootId } ?: return null
         val trimmed = rel.trim()
         if (trimmed.startsWith("/") || trimmed.startsWith("\\")) return null
-        val rootCanon = bridge.canonical(root.path)
+        // A null from canonical() means resolution failed — deny. Never fall through to an
+        // unresolved path: it can start with the root prefix and still contain "..".
+        val rootCanon = bridge.canonical(root.path) ?: return null
         val joined = if (trimmed.isEmpty()) rootCanon else "$rootCanon/$trimmed"
-        val canon = bridge.canonical(joined)
+        val canon = bridge.canonical(joined) ?: return null
         return if (canon == rootCanon || canon.startsWith("$rootCanon/")) canon else null
     }
 
     /** Confines an already-absolute path (used for an inbound push destination). */
     fun confineAbsolute(abs: String): String? {
-        val canon = bridge.canonical(abs)
+        val canon = bridge.canonical(abs) ?: return null
         return roots.firstOrNull { root ->
-            val rootCanon = bridge.canonical(root.path)
+            val rootCanon = bridge.canonical(root.path) ?: return@firstOrNull false
             canon == rootCanon || canon.startsWith("$rootCanon/")
         }?.let { canon }
     }
@@ -1260,7 +1281,7 @@ Expected: PASS, 6 tests.
 - [ ] **Step 5: Run the whole suite**
 
 Run: `./gradlew :shared:desktopTest`
-Expected: PASS. Total should now be 75 + 3 + 5 + 10 + 9 + 4 + 6 = 112, 1 skipped.
+Expected: PASS. Total should now be 75 + 3 + 6 + 10 + 9 + 4 + 6 = 113, 1 skipped (Task 2 carries 6 tests, not 5, after the `canonical` fix round).
 
 - [ ] **Step 6: Commit**
 
@@ -1342,8 +1363,8 @@ class FileBridgeService : IFileBridge.Stub() {
 
     override fun exists(path: String): Boolean = File(path).exists()
 
-    override fun canonical(path: String): String =
-        runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+    override fun canonical(path: String): String? =
+        runCatching { File(path).canonicalPath }.getOrNull()
 
     override fun open(path: String): ParcelFileDescriptor? = runCatching {
         ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
@@ -1428,7 +1449,9 @@ class ShizukuFileBridge(context: Context) : FileBridge {
 
     fun isReady(): Boolean = service != null
 
-    override fun canonical(path: String): String = service?.canonical(path) ?: path
+    // Null when the service isn't bound. Echoing the input path back would hand BrowseEngine
+    // an unresolved string to confine against — the same bypass the JVM bridge avoids.
+    override fun canonical(path: String): String? = service?.canonical(path)
 
     override fun list(dir: String): List<FsEntry> =
         service?.list(dir)?.mapNotNull { parseRow(it) } ?: emptyList()
