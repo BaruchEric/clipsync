@@ -454,8 +454,18 @@ object AppGraph {
                 Log.i(TAG, "sms send ok=$ok len=${event.body.length}")
             }
             // Phone → desktop kinds arriving here would be another phone; nothing to do.
+            // The Fs*/Media*/Thumb* request types (FsQueryRoots, FsQueryList, MediaQuery,
+            // ThumbQuery, FsPull, FsPush, FsDelete, FsRename) belong to a later task's real
+            // browse handlers; until then they're inert here like the other unhandled kinds.
             is MirrorEvent.NotifPosted, is MirrorEvent.SmsThreads,
             is MirrorEvent.SmsMessages, is MirrorEvent.SmsSent,
+            is MirrorEvent.FsQueryRoots, is MirrorEvent.FsRoots,
+            is MirrorEvent.FsQueryList, is MirrorEvent.FsEntries,
+            is MirrorEvent.MediaQuery, is MirrorEvent.MediaItems,
+            is MirrorEvent.ThumbQuery, is MirrorEvent.Thumbs,
+            is MirrorEvent.FsPull, is MirrorEvent.FsPush,
+            is MirrorEvent.FsDelete, is MirrorEvent.FsRename,
+            is MirrorEvent.FsResult,
             -> Unit
         }
     }
