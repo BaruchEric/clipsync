@@ -90,11 +90,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.withTimeoutOrNull
 import java.awt.FileDialog
 import java.awt.datatransfer.DataFlavor
 import java.awt.dnd.DnDConstants
@@ -614,6 +616,14 @@ private fun FilesScreen(boot: Boot) {
     val thumbs by boot.thumbs.collectAsState()
     val fsEpoch by boot.fsEpoch.collectAsState()
     val mediaEpoch by boot.mediaEpoch.collectAsState()
+    // Every browse request targets ONE phone rather than broadcasting (mirror.send(null, …)
+    // means every connected peer). A delete or rename broadcast to every paired phone would
+    // trash-move whatever sits at that relative path on each of them — Camera/IMG_0001.jpg
+    // means different things on different phones. Targeting only the destructive ops would be
+    // worse than broadcasting all of them: a listing from one phone and a delete addressed to
+    // another. First-connected-peer matches today's de-facto behaviour (there's no picker yet).
+    val connected by boot.connectedPeers.collectAsState()
+    val peer = connected.firstOrNull()
     var root by remember { mutableStateOf("") }
     var path by remember { mutableStateOf("") }
     var grid by remember { mutableStateOf(false) }
@@ -644,13 +654,13 @@ private fun FilesScreen(boot: Boot) {
     fun list(r: String, p: String) {
         root = r
         path = p
-        scope.launch { boot.mirror.send(null, MirrorEvent.FsQueryList(r, p)) }
+        scope.launch { boot.mirror.send(peer, MirrorEvent.FsQueryList(r, p)) }
     }
 
-    LaunchedEffect(Unit) { boot.mirror.send(null, MirrorEvent.FsQueryRoots) }
+    LaunchedEffect(Unit) { boot.mirror.send(peer, MirrorEvent.FsQueryRoots) }
     LaunchedEffect(roots) { if (root.isEmpty() && roots.isNotEmpty()) list(roots.first().id, "") }
     LaunchedEffect(grid) {
-        if (grid) boot.mirror.send(null, MirrorEvent.MediaQuery(0, 60))
+        if (grid) boot.mirror.send(peer, MirrorEvent.MediaQuery(0, 60))
     }
     // Keyed on thumbs as well as photos: a MediaQuery returns up to 60 items but a ThumbQuery
     // carries at most 24, so keying on photos alone would leave items 25+ blank forever. The
@@ -663,7 +673,7 @@ private fun FilesScreen(boot: Boot) {
             .take(24)
         if (missing.isNotEmpty()) {
             requestedThumbs = requestedThumbs + missing
-            boot.mirror.send(null, MirrorEvent.ThumbQuery(missing))
+            boot.mirror.send(peer, MirrorEvent.ThumbQuery(missing))
         }
     }
 
@@ -765,7 +775,7 @@ private fun FilesScreen(boot: Boot) {
                             entry.name,
                             Modifier.weight(1f).clickable {
                                 if (entry.dir) list(root, child)
-                                else scope.launch { boot.mirror.send(null, MirrorEvent.FsPull(root, child)) }
+                                else scope.launch { boot.mirror.send(peer, MirrorEvent.FsPull(root, child)) }
                             },
                         )
                         if (!entry.dir) Text("${entry.size / 1024} KB", Modifier.padding(end = 8.dp))
@@ -787,8 +797,15 @@ private fun FilesScreen(boot: Boot) {
                     val paths = confirm
                     confirm = emptyList()
                     scope.launch {
-                        boot.mirror.send(null, MirrorEvent.FsDelete(root, paths))
-                        boot.mirror.send(null, MirrorEvent.FsQueryList(root, path))
+                        boot.mirror.send(peer, MirrorEvent.FsDelete(root, paths))
+                        // Await the FsResult before re-listing rather than firing both events
+                        // back to back: the phone dispatches each browse event independently on
+                        // Dispatchers.IO, so a bare fire-and-forget list races the delete and
+                        // usually wins — delete costs many more canonical()/Binder round trips —
+                        // and the pane renders the pre-delete state with no second refresh ever
+                        // coming. A timeout means a lost reply can't wedge the UI.
+                        withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "delete" } }
+                        boot.mirror.send(peer, MirrorEvent.FsQueryList(root, path))
                     }
                 }) { Text("Move to trash") }
             },
@@ -806,8 +823,10 @@ private fun FilesScreen(boot: Boot) {
                 TextButton(onClick = {
                     renaming = null
                     scope.launch {
-                        boot.mirror.send(null, MirrorEvent.FsRename(root, target, name))
-                        boot.mirror.send(null, MirrorEvent.FsQueryList(root, path))
+                        boot.mirror.send(peer, MirrorEvent.FsRename(root, target, name))
+                        // Same race as delete above: await the reply before re-listing.
+                        withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "rename" } }
+                        boot.mirror.send(peer, MirrorEvent.FsQueryList(root, path))
                     }
                 }) { Text("Rename") }
             },
