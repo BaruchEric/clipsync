@@ -3,6 +3,9 @@ package ca.beric.clipsync.browse
 import ca.beric.clipsync.protocol.FsRoot
 import ca.beric.clipsync.protocol.MirrorEvent
 import ca.beric.clipsync.transfer.FileTransferEngine
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CoroutineScope
 
 /** One browsable location on this device. [path] is absolute; [id] is what the wire carries. */
@@ -42,7 +45,9 @@ class BrowseEngine(
         return when (event) {
             is MirrorEvent.FsQueryRoots -> MirrorEvent.FsRoots(roots.map { FsRoot(it.id, it.label) })
             is MirrorEvent.FsQueryList -> onList(event)
-            else -> null // mutations and transfers arrive in Tasks 4 and 6
+            is MirrorEvent.FsDelete -> onDelete(event)
+            is MirrorEvent.FsRename -> onRename(event)
+            else -> null // transfers arrive in Task 6
         }
     }
 
@@ -87,6 +92,52 @@ class BrowseEngine(
         return MirrorEvent.FsEntries(q.root, q.path, entries)
     }
 
+    /**
+     * Trash-first delete: each entry is *moved* into <root>/.clipsync-trash, so deleting a
+     * directory costs one rename and stays fully reversible. A move that fails changes
+     * nothing — we never fall back to copy-then-unlink, which could half-delete a file.
+     */
+    private fun onDelete(req: MirrorEvent.FsDelete): MirrorEvent {
+        val rootPath = resolve(req.root, "") ?: return MirrorEvent.FsResult("delete", false, "path rejected")
+        val trash = "$rootPath/$TRASH_DIR"
+        val stamp = STAMP.format(Instant.ofEpochMilli(clock()).atZone(ZoneId.systemDefault()))
+        var moved = 0
+        for (rel in req.paths) {
+            val abs = resolve(req.root, rel)
+                ?: return MirrorEvent.FsResult("delete", false, "path rejected")
+            if (abs == rootPath || abs == trash || abs.startsWith("$trash/")) {
+                return MirrorEvent.FsResult("delete", false, "path rejected")
+            }
+            if (!bridge.mkdirs(trash)) return MirrorEvent.FsResult("delete", false, "could not open trash")
+            val name = abs.substringAfterLast('/')
+            var target = "$trash/$stamp-$name"
+            var n = 1
+            while (bridge.exists(target)) target = "$trash/$stamp-$n-$name".also { n++ }
+            if (!bridge.move(abs, target)) {
+                return MirrorEvent.FsResult("delete", false, "could not move $name to the trash")
+            }
+            moved++
+        }
+        log("browse delete: $moved to trash")
+        return MirrorEvent.FsResult("delete", true, "$moved")
+    }
+
+    /** Same-directory rename only. Changing directories is a move, and moves are not in v1. */
+    private fun onRename(req: MirrorEvent.FsRename): MirrorEvent {
+        val name = req.newName.trim()
+        if (name.isEmpty() || name == "." || name == ".." || '/' in name || '\\' in name) {
+            return MirrorEvent.FsResult("rename", false, "invalid name")
+        }
+        val abs = resolve(req.root, req.path) ?: return MirrorEvent.FsResult("rename", false, "path rejected")
+        if (abs == resolve(req.root, "")) return MirrorEvent.FsResult("rename", false, "path rejected")
+        val target = "${abs.substringBeforeLast('/')}/$name"
+        if (confineAbsolute(target) == null) return MirrorEvent.FsResult("rename", false, "path rejected")
+        if (bridge.exists(target)) return MirrorEvent.FsResult("rename", false, "name already taken")
+        if (!bridge.move(abs, target)) return MirrorEvent.FsResult("rename", false, "rename failed")
+        log("browse rename: ${abs.substringAfterLast('/')} -> $name")
+        return MirrorEvent.FsResult("rename", true, name)
+    }
+
     /** The op label for an FsResult, or null when this event isn't a browse request at all. */
     private fun opNameOf(event: MirrorEvent): String? = when (event) {
         is MirrorEvent.FsQueryRoots -> "roots"
@@ -106,5 +157,7 @@ class BrowseEngine(
 
         /** A directory listing is bounded: one envelope, one screenful of scrolling. */
         const val MAX_ENTRIES = 2000
+
+        private val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
     }
 }
