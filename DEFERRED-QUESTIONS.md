@@ -10,6 +10,65 @@ Decisions I made without you are logged here with my reasoning, so you can veto 
 - ~~M6 real-hardware confirmation~~ — **DONE 2026-08-12**: verified Mac↔SM-S921U both directions on the real LAN, sha256-identical, including the cold-start share path. See HANDOFF "M6 real-S24 run". Tags m3/m4/m6 pushed.
 - ~~m5 LTE gate~~ — **MET 2026-08-12 17:31, tagged.** Phone on LTE + Tailscale → Gallery photo on the Mac pasteboard in ~3 s (gate: <5 s); endpoint refresh carried the network switch; Mac→phone exercised by the link-up replay. ~~Only mechanical step left: install the current APK on the S24 at next Wi-Fi/USB contact.~~ **Delivered 2026-08-12 18:20 — by clipsync itself** (wireless debugging turned itself off on the network switch, so no adb): `Download/clipsync/clipsync-0.2.1.apk`, 55 MB in ~15 s. Left for you, deliberately, because it's a consent dialog: **tap the APK → Update → open clipsync once** (Shizuku grant survives the update). Then delete the APKs in that folder. If you'd rather I do it end-to-end: toggle Wireless debugging on and say so.
 - ~~M7/M8 scope sign-off~~ — **signed off ("go with both") and built 2026-08-12.** M7 verified end-to-end (mirror + reply); M8 read path verified, live radio send left as your one tap (Messages tab → text yourself), observer push proves itself on the first real text. Note: I granted the phone-side access via adb under that sign-off — notification listener (`cmd notification allow_listener ca.beric.clipsync/…NotifMirrorService`) and SMS (`pm grant … READ_SMS/SEND_SMS`); revoke anytime with `disallow_listener` / `pm revoke`, or the app's cards re-request interactively.
+- **M9 real-hardware confirmation — not started.** Phone file & photo browse is built and
+  gate-verified only (2026-08-13); your S24 was unreachable this session (no adb device, no
+  `_adb-tls-connect` advert, Tailscale node offline). Needs: unlock the phone, start Shizuku,
+  turn on "Let a paired Mac browse my files" and grant the photo permission when asked, then
+  the on-device checklist in the M9 task brief (roots/list/pull/push/delete/rename over adb,
+  the disabled-toggle refusal, the photo-permission-denied grid state, four Files-tab
+  screenshots). `m9` tags once that runs — see the "M9 phone file & photo browse" section
+  below for the decisions made along the way.
+
+## M9 phone file & photo browse — decisions & known limitations (2026-08-13)
+
+Built and gate-verified (119 shared tests, both the Android APK and the desktop app image
+build clean); the on-device session is still open, so `m9` is untagged and none of this has
+run against your phone yet. Full write-up: `HANDOFF.md`'s M9 session section.
+
+Decisions made without you (rationale in the spec/plan; veto any):
+
+- **Full write access, not read-only pull.** The spec's open question was pull-only (a safer,
+  LocalSend-style default) vs. full browse+push+delete+rename (LinkMyMac parity, matching what
+  you asked to "implement"). Your call, made 2026-08-13: full write access — a paired Mac can
+  push new files to the phone and rename/trash existing ones, not just copy files off. The
+  desktop still never honors a peer-supplied absolute write path; every push resolves inside
+  the destination root the *phone* names and confines, the same as every other path.
+- **Trash-first delete, no auto-purge, no restore UI.** Deleting moves the entry into
+  `<root>/.clipsync-trash` instead of unlinking it — cheap insurance against a wrong click
+  hitting the wrong file (a real risk mid-build: the milestone's own stale-listing bug, see
+  HANDOFF, made this concretely useful). Nothing purges the trash directory automatically, and
+  there is no UI anywhere to browse or restore what's in it — a deleted file's only way back is
+  manual, through the phone's own file manager. The consent card deliberately does not claim
+  trashed items "can be restored" — an earlier draft did, and a reviewer caught it as promising
+  a feature that doesn't exist.
+- **Images only for the photo permission — `READ_MEDIA_IMAGES`, not `READ_MEDIA_VIDEO`.** The
+  manifest briefly declared both; the grid never queries video, so that grant was dropped
+  before it shipped (Task 8) rather than requesting access the app doesn't use. Consistent with
+  the project's existing restraint on `READ_CONTACTS` for Messages.
+- **Consent copy discloses the write access explicitly.** The on-phone toggle's ON-state text
+  names "add new ones, rename, and trash," not just "copy them off" — an earlier draft
+  undersold the grant (read as pull-only), caught in Task 10's review as a material omission on
+  a consent surface, not a style note.
+
+Known limitations, not fixed in this milestone:
+
+- A `list` refusal for a directory the user has since navigated away from can misname the
+  *currently displayed* directory as the one that was refused — `FsResult` carries only
+  `op`/`ok`/`detail`, nothing to correlate a reply against the request that produced it. Needs
+  a protocol change (tag `FsResult` with the root/path or a request id). Produces a wrong
+  message, not data loss; needs fast navigation to trigger.
+- The desktop broadcasts browse requests to every connected peer rather than targeting one — a
+  second paired phone would answer the same request. Not reachable with your current
+  one-phone setup.
+- Nothing re-binds the Shizuku file service if `FileBridgeService` dies on its own while
+  Shizuku itself keeps running (it's a killable, non-daemon process) — browsing stays dead
+  until the clipsync app is relaunched. Distinct from the Shizuku-*restarts* case, which Task 9
+  already covers (`Shizuku.addBinderReceivedListener`).
+- Carried from M6, found during M9's review, not an M9 regression: `FileTransferEngine`'s
+  transfer-state list is a plain `MutableStateFlow` read-modify-write with no `.update{}` — two
+  concurrent transfers on different threads can silently drop a state update, which can make
+  transfer rows look frozen in both UIs. One-line fix (`_transfers.update { ... }`); parked for
+  the branch's final review rather than opened in this task.
 
 ## M4 live sync — DONE (2026-08-08)
 

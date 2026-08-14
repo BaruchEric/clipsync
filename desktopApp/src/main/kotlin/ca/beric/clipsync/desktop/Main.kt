@@ -948,6 +948,24 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
                     "sms-send" -> if (parts.size == 3) MirrorEvent.SmsSend(parts[1], parts[2]) else null
                     "notif-reply" -> boot.phoneNotifs.value.firstOrNull { it.canReply }
                         ?.let { MirrorEvent.NotifReply(it.key, line.removePrefix("notif-reply").trim()) }
+                    "fs-roots" -> MirrorEvent.FsQueryRoots
+                    "fs-list" -> if (parts.size >= 2) MirrorEvent.FsQueryList(parts[1], parts.getOrElse(2) { "" }) else null
+                    "fs-pull" -> if (parts.size == 3) MirrorEvent.FsPull(parts[1], parts[2]) else null
+                    "fs-push" -> if (parts.size == 3) MirrorEvent.FsPush(parts[1], parts[2]) else null
+                    "fs-delete" -> if (parts.size == 3) MirrorEvent.FsDelete(parts[1], listOf(parts[2])) else null
+                    "fs-rename" -> if (parts.size == 3 && parts[2].contains(' ')) {
+                        // The outer split above is limit=3 (verb, root, rest-of-line), matching
+                        // sms-send's "last field is free text" idiom, so "path newName" arrives
+                        // fused in parts[2] — parts.size can never reach 4, so the literal
+                        // parts[3] read this verb would otherwise need is unreachable. Re-split
+                        // the fused field instead of widening the outer limit, which would break
+                        // sms-send's multi-word body. Split from the RIGHT: path (an existing
+                        // /sdcard file, often with spaces in its real name) keeps everything up
+                        // to the last space; newName is the final token, since the operator
+                        // typing it can trivially choose one with no space.
+                        MirrorEvent.FsRename(parts[1], parts[2].substringBeforeLast(' '), parts[2].substringAfterLast(' '))
+                    } else null
+                    "media" -> MirrorEvent.MediaQuery(0, 20)
                     else -> null
                 }
                 if (event == null) {

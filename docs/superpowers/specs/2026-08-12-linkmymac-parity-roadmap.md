@@ -33,7 +33,7 @@ experience*, not cloning the app.
 | SMS/Messages from desktop | ✅ | **M8 built 2026-08-12** (threads/read/send from desktop; read path verified on-device; live send = one user tap) |
 | Screen mirror + remote control | ❌ | Out for now: **scrcpy** already does this best (FOSS); remote *input* is feasible via Shizuku (`input` through SHELL uid) if ever wanted |
 | Webcam | ❌ | Out: whole product on its own (video pipeline + virtual camera driver on macOS) |
-| Photos / contacts / file-manager browse | ❌ | Out for now: pull-model browsing is a different trust posture than push-sync; revisit after M6/M7 |
+| Photos / contacts / file-manager browse | 🟡 files + photos (M9; on-device pending) | **M9 built 2026-08-13** — full browse/pull/push/rename/trash-delete via the Shizuku bridge (no new storage permission for files); the photo grid needs `READ_MEDIA_IMAGES` only. Gate-verified, not yet hardware-verified. Contacts stay out: reading them would need `READ_CONTACTS`, which clipsync has never requested (same restraint as Messages/M8) |
 
 ## Priority call (made autonomously — veto welcome)
 

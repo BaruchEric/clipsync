@@ -1,7 +1,9 @@
-# clipsync — Build Handoff (2026-08-12)
+# clipsync — Build Handoff (2026-08-13)
 
-State after Phase 0 → M8. Everything below is verified on real hardware (Mac ↔ SM-S921U);
-sessions are logged newest-first below the table.
+State after Phase 0 → M9. Everything below is verified on real hardware (Mac ↔ SM-S921U)
+**except M9 phone browse**, which is built and gate-verified only — its on-device session is
+still pending (see its row and session section below). Sessions are logged newest-first below
+the table.
 
 ## Done & verified
 
@@ -18,8 +20,9 @@ sessions are logged newest-first below the table.
 | GUI status pass | ✅ | status-first screens both apps, verified by on-device screenshots |
 | M7 notification mirroring + reply | ✅ tag `m7` | phone notification → Mac ~2 s; desktop reply landed back through RemoteInput (ok=true, len asserted) |
 | M8 messages | 🟢 read path verified; tag `m8` after Eric's one live send | 30 threads / 15-message fetch ~2 s each; observer on the right URIs; radio send + new-text push ride Eric's first real text |
+| M9 phone browse | 🟡 built, gate-verified only; on-device run pending | 119/0/1 shared suite, `:androidApp:assembleDebug` + `:desktopApp:createDistributable` both green; zero on-device execution of the Android half (Shizuku user service, MediaStore) or the desktop Files tab — see the M9 session below |
 
-**75 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.3.0/vc4); `:desktopApp:createDistributable` produces a launchable macOS app image.
+**119 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.0/vc5); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
 **Fresh clone / new worktree: write `local.properties` first.** It is gitignored, so it never
 propagates — without it `:androidApp` dies at dependency resolution with "SDK location not found"
@@ -28,6 +31,75 @@ propagates — without it `:androidApp` dies at dependency resolution with "SDK 
 ```
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
+
+## M9 phone file & photo browse (2026-08-13) — built + gate-verified; on-device run PENDING
+
+Triggered by the parity roadmap's last open row ("Photos / contacts / file-manager browse").
+Spec: `docs/superpowers/specs/2026-08-13-m9-phone-browse-design.md`; plan:
+`docs/superpowers/plans/2026-08-13-m9-phone-browse.md`; 12-task SDD ledger:
+`.superpowers/sdd/2026-08-13-m9-phone-browse/progress.md`.
+
+What exists now: a `BrowseEngine` (jvmShared) confining every path to one of 7 phone roots
+(internal, Download, Documents, Camera, Pictures, Movies, Music) by canonical-path prefix
+check; trash-first delete (`<root>/.clipsync-trash`, no auto-purge, no restore UI — items are
+moved, not erased); rename, pull, push; a MediaStore-backed photo index (images only, paged,
+thumbnails on demand); a Shizuku SHELL-uid user-service file bridge on the phone (adds no new
+storage permission — Android background capture already needed Shizuku); a `READ_MEDIA_IMAGES`
+grant for the photo grid (`READ_MEDIA_VIDEO` was requested then dropped — the grid never
+queried it); an off-by-default phone consent card that gates every read and write; and a
+desktop Files tab (tree + Photos grid, delete confirm dialog, harness verbs in
+`watchMirrorCmd`: `fs-roots`/`fs-list`/`fs-pull`/`fs-push`/`fs-delete`/`fs-rename`/`media`).
+`versionName 0.4.0` / `versionCode 5`. Suite 75 → 119.
+
+**Nothing in the Android half has executed on a device.** All 12 tasks gated on
+`:shared:desktopTest` + `:androidApp:assembleDebug` + `:desktopApp:createDistributable`
+only — Shizuku user services, MediaStore, and the desktop Compose UI all need either a device
+or a clicked tray window that no automated run in this milestone ever reached (clipsync is a
+menu-bar app; its window doesn't exist until the status item is clicked — confirmed by a
+`System Events` probe during Task 11 that found window count 0 and was abandoned rather than
+faked). The on-device session in the task brief (roots/list/pull/push/delete/rename over adb,
+the disabled-toggle refusal, the photo-permission-denied grid check, and four desktop
+screenshots) is deliberately **not done this session** — Eric's S24 was unreachable (no adb
+device, no `_adb-tls-connect` mDNS advert, its Tailscale node offline >1 day). The `m9` tag is
+withheld until that session runs; every other tag in this project (`m1`–`m7`) means "verified
+on real hardware," and `m8` was left untagged for the same reason pending one live SMS send.
+
+Four things learned the hard way, all from code review rather than a device, since none of
+this could run on a device yet:
+
+- **`O_CREAT|O_EXCL` is what refuses a symlinked final component, not `O_NOFOLLOW`.** A
+  mutation test that dropped `NOFOLLOW_LINKS` alone still passed — `CREATE_NEW` (which maps to
+  `O_CREAT|O_EXCL`) already fails with `EEXIST` the instant the final path component exists,
+  symlink or not, verified directly against POSIX semantics with a syscall probe rather than
+  trusted on faith. Both flags are kept — `CREATE_NEW` carries the real guarantee,
+  `NOFOLLOW_LINKS` is defense-in-depth for non-exclusive opens — but the covering test cannot
+  tell them apart, and the plan now says so instead of implying it can.
+- **Adding subtypes to a sealed `MirrorEvent` silently breaks a consumer in another module.**
+  Task 1 added 13 new subtypes; `AppGraph.handleMirrorEvent`'s exhaustive `when` didn't compile
+  against them, and `:androidApp:assembleDebug` was broken from Task 1 through Task 4 — four
+  tasks in a row shipped on a green `:shared:desktopTest` alone. Every task from Task 5 on was
+  required to gate on all three build targets, and the fix for a sealed-type change is to name
+  every new subtype explicitly (even in a throwaway ignore branch) rather than `else -> Unit`,
+  which is exactly what let the break through undetected the first time.
+- **`FileTransferEngine(this, ...)` constructed inside a test's own `runBlocking` deadlocks on
+  the engine's stall watchdog.** The watchdog coroutine becomes a child of the calling
+  `runBlocking` scope, so `runBlocking` waits on its own child forever (one run hung 3m28s
+  before being killed). Fix is a separate `CoroutineScope(SupervisorJob())` plus an
+  `@AfterTest` cancel, matching the pre-existing `FileTransferEngineTest` pattern — needed
+  twice, in both Task 5 and Task 6, once the same construction shape showed up again.
+- **`StateFlow` conflates an unchanged value, which silently defeats a payload-keyed
+  `LaunchedEffect`.** `FsEntries` is a data class, so re-listing a directory whose contents
+  haven't changed produces a value `==` the cached one — `MutableStateFlow` never re-emits it,
+  so an effect keyed on the listing itself never re-fires. This sat directly on the milestone's
+  own QA path (disable browsing, observe the refusal, re-enable, revisit the same folder) and
+  was only caught because a re-reviewer walked that exact sequence through the code by hand.
+  Fixed by keying on a reply counter (`fsEpoch`/`mediaEpoch`) instead of the payload shape —
+  the identical bug shape independently caused "permission granted, zero photos" to render as
+  "permission still denied" until fixed the same way.
+
+Known limitations, not fixed in this milestone — see `DEFERRED-QUESTIONS.md` for the full
+list and the milestone's other autonomous decisions (full write access vs. read-only pull,
+trash semantics, images-only permission, consent copy).
 
 ## M6 file transfer (2026-08-12) — built + emulator-verified
 

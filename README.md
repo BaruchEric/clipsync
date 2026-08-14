@@ -41,6 +41,15 @@ an upsell.
   Messages tab. Requires granting SMS permissions on the phone (F-Droid-fine; this is why
   clipsync doesn't target Google Play). Address-only on purpose — contact names would need
   READ_CONTACTS, which clipsync never requests. MMS/RCS are out of scope.
+- **Phone file & photo browse (opt-in).** Browse the phone's storage (7 roots — internal,
+  Download, Documents, Camera, Pictures, Movies, Music) and photo library from the desktop
+  Files tab: pull, push, rename, and trash-first delete (moved to `.clipsync-trash`, never
+  erased, no auto-purge, no restore UI). Off until you turn on "Let a paired Mac browse my
+  files" on the phone. File access goes through the same Shizuku SHELL-uid bridge as clipboard
+  capture, so it adds **no new storage permission**; the photo grid needs one additional grant,
+  `READ_MEDIA_IMAGES` only (images, not video — the grid never queries video, so that
+  permission was dropped before shipping). The desktop never honors a peer-supplied write
+  path — every push lands inside the destination the phone itself resolves and confines.
 
 ## Android background capture
 
@@ -97,8 +106,11 @@ background capture via Shizuku, crypto + QR/SAS pairing, LAN sync with mDNS disc
 tailnet hardening (a photo copied on LTE reaches the Mac in ~3 s over Tailscale), file
 transfer both directions, offline-copy replay on reconnect, notification mirroring with
 desktop reply, and status-first UI on both apps. Messages (M8) is built with its read path
-verified on-device; the live radio send is the last hand-verification. The parity roadmap
-(vs. LinkMyMac/LinkMyDroid) is in
+verified on-device; the live radio send is the last hand-verification. Phone file & photo
+browse (M9) is built and gate-verified (119 shared tests; both the Android APK and the
+desktop app build clean) but **not yet hardware-verified** — nothing in its Android half or
+its desktop Files tab has run on a real device yet, so `m9` stays untagged until that session.
+The parity roadmap (vs. LinkMyMac/LinkMyDroid) is in
 `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 
 ## License
