@@ -120,4 +120,40 @@ class ProtocolTest {
         assertNull(MirrorCodec.decode("""{"t":"hologram","x":1}"""))
         assertNull(MirrorCodec.decode("not json"))
     }
+
+    @Test
+    fun browseEventsRoundTrip() {
+        val events = listOf<MirrorEvent>(
+            MirrorEvent.FsQueryRoots,
+            MirrorEvent.FsRoots(listOf(FsRoot("dl", "Download"))),
+            MirrorEvent.FsQueryList("dl", "sub/dir"),
+            MirrorEvent.FsEntries("dl", "sub/dir", listOf(FsEntry("a.txt", 12L, false, 99L, "text/plain"))),
+            MirrorEvent.MediaQuery(0, 60),
+            MirrorEvent.MediaItems(listOf(MediaItem(7L, "IMG.jpg", 900L, 5L, "image/jpeg", 4000, 3000))),
+            MirrorEvent.ThumbQuery(listOf(7L, 8L)),
+            MirrorEvent.Thumbs(mapOf(7L to "QUJD")),
+            MirrorEvent.FsPull("dl", "a.txt"),
+            MirrorEvent.FsPush("dl", "sub"),
+            MirrorEvent.FsDelete("dl", listOf("a.txt", "b.txt")),
+            MirrorEvent.FsRename("dl", "a.txt", "b.txt"),
+            MirrorEvent.FsResult("pull", false, "not found"),
+        )
+        for (event in events) {
+            assertEquals(event, MirrorCodec.decode(MirrorCodec.encode(event)), "round trip failed for $event")
+        }
+    }
+
+    @Test
+    fun fileOfferDestDefaultsToEmptyAndSurvivesAnOldEncoder() {
+        // An old (0.3.x) peer emits a FileOffer with no "dest" key at all.
+        val legacy = """{"t":"file","id":"ab","name":"x.bin","size":1,"mime":"application/octet-stream","sha256":"cd","chunks":1}"""
+        val decoded = ControlCodec.decode(legacy) as ControlMessage.FileOffer
+        assertEquals("", decoded.dest)
+    }
+
+    @Test
+    fun fileOfferDestRoundTrips() {
+        val offer = ControlMessage.FileOffer("ab", "x.bin", 1L, "text/plain", "cd", 1, "/sdcard/Documents")
+        assertEquals(offer, ControlCodec.decode(ControlCodec.encode(offer)))
+    }
 }

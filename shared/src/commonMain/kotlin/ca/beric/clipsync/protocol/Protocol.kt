@@ -99,6 +99,12 @@ sealed interface ControlMessage {
         @SerialName("mime") val mime: String,
         @SerialName("sha256") val sha256: String,
         @SerialName("chunks") val chunkCount: Int,
+        /**
+         * Absolute directory the receiver should write into (M9 push). Empty means "your
+         * default", which is what every pre-0.4 sender emits and what every pre-0.4 receiver
+         * assumes. Only the phone honors it; the desktop always writes to ~/Downloads/clipsync.
+         */
+        @SerialName("dest") val dest: String = "",
     ) : ControlMessage
 
     /**
@@ -198,6 +204,90 @@ sealed interface MirrorEvent {
         @SerialName("ok") val ok: Boolean,
         @SerialName("to") val to: String,
     ) : MirrorEvent
+
+    @Serializable
+    @SerialName("fs-roots?")
+    data object FsQueryRoots : MirrorEvent
+
+    @Serializable
+    @SerialName("fs-roots")
+    data class FsRoots(@SerialName("list") val roots: List<FsRoot>) : MirrorEvent
+
+    /** [path] is relative to [root]; "" is the root itself. */
+    @Serializable
+    @SerialName("fs-list?")
+    data class FsQueryList(
+        @SerialName("root") val root: String,
+        @SerialName("path") val path: String = "",
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("fs-entries")
+    data class FsEntries(
+        @SerialName("root") val root: String,
+        @SerialName("path") val path: String,
+        @SerialName("list") val entries: List<FsEntry>,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("media?")
+    data class MediaQuery(
+        @SerialName("off") val offset: Int = 0,
+        @SerialName("lim") val limit: Int = 60,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("media")
+    data class MediaItems(@SerialName("list") val items: List<MediaItem>) : MirrorEvent
+
+    @Serializable
+    @SerialName("thumbs?")
+    data class ThumbQuery(@SerialName("ids") val ids: List<Long>) : MirrorEvent
+
+    /** MediaStore id → base64 JPEG thumbnail. Sealed like every other mirror body. */
+    @Serializable
+    @SerialName("thumbs")
+    data class Thumbs(@SerialName("map") val jpegB64: Map<Long, String>) : MirrorEvent
+
+    /** Desktop asks the phone to send one file; the answer is a file transfer, or an FsResult. */
+    @Serializable
+    @SerialName("fs-pull?")
+    data class FsPull(
+        @SerialName("root") val root: String,
+        @SerialName("path") val path: String,
+    ) : MirrorEvent
+
+    /** Desktop asks where to write; FsResult.detail carries the absolute directory on success. */
+    @Serializable
+    @SerialName("fs-push?")
+    data class FsPush(
+        @SerialName("root") val root: String,
+        @SerialName("dir") val dir: String = "",
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("fs-delete?")
+    data class FsDelete(
+        @SerialName("root") val root: String,
+        @SerialName("paths") val paths: List<String>,
+    ) : MirrorEvent
+
+    @Serializable
+    @SerialName("fs-rename?")
+    data class FsRename(
+        @SerialName("root") val root: String,
+        @SerialName("path") val path: String,
+        @SerialName("to") val newName: String,
+    ) : MirrorEvent
+
+    /** Generic answer for the mutating ops. [op] echoes "pull"/"push"/"delete"/"rename". */
+    @Serializable
+    @SerialName("fs-result")
+    data class FsResult(
+        @SerialName("op") val op: String,
+        @SerialName("ok") val ok: Boolean,
+        @SerialName("detail") val detail: String = "",
+    ) : MirrorEvent
 }
 
 @Serializable
@@ -215,6 +305,35 @@ data class SmsMessage(
     @SerialName("body") val body: String,
     @SerialName("date") val dateMs: Long,
     @SerialName("out") val outbound: Boolean,
+)
+
+/** One browsable storage root on the phone. [id] is opaque; [label] is what the desktop shows. */
+@Serializable
+data class FsRoot(
+    @SerialName("id") val id: String,
+    @SerialName("label") val label: String,
+)
+
+/** One directory entry. [mime] is best-effort, "" for directories. */
+@Serializable
+data class FsEntry(
+    @SerialName("name") val name: String,
+    @SerialName("size") val size: Long,
+    @SerialName("dir") val dir: Boolean,
+    @SerialName("mtime") val mtimeMs: Long,
+    @SerialName("mime") val mime: String = "",
+)
+
+/** One MediaStore image/video, for the photo grid. [id] keys a later thumbnail request. */
+@Serializable
+data class MediaItem(
+    @SerialName("id") val id: Long,
+    @SerialName("name") val name: String,
+    @SerialName("size") val size: Long,
+    @SerialName("date") val dateMs: Long,
+    @SerialName("mime") val mime: String,
+    @SerialName("w") val width: Int = 0,
+    @SerialName("h") val height: Int = 0,
 )
 
 /** Serializes mirror events; unknown subtypes (newer peers) decode to null and are dropped. */
