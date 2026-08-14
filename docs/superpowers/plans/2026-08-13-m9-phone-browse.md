@@ -2155,9 +2155,19 @@ private fun FilesScreen(boot: Boot) {
     LaunchedEffect(grid) {
         if (grid) boot.mirror.send(null, MirrorEvent.MediaQuery(0, 60))
     }
-    LaunchedEffect(photos) {
-        val missing = photos.map { it.id }.filterNot { thumbs.containsKey(it) }.take(24)
-        if (missing.isNotEmpty()) boot.mirror.send(null, MirrorEvent.ThumbQuery(missing))
+    // Keyed on thumbs as well as photos: a MediaQuery returns up to 60 items but a ThumbQuery
+    // carries at most 24, so keying on photos alone would leave items 25+ blank forever. The
+    // requested set stops the loop from re-asking for ids the phone cannot produce a thumbnail
+    // for — those are omitted from the reply, so `missing` would never drain without it.
+    var requestedThumbs by remember { mutableStateOf(emptySet<Long>()) }
+    LaunchedEffect(photos, thumbs) {
+        val missing = photos.map { it.id }
+            .filterNot { thumbs.containsKey(it) || it in requestedThumbs }
+            .take(24)
+        if (missing.isNotEmpty()) {
+            requestedThumbs = requestedThumbs + missing
+            boot.mirror.send(null, MirrorEvent.ThumbQuery(missing))
+        }
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
@@ -2182,7 +2192,15 @@ private fun FilesScreen(boot: Boot) {
             )
             return@Column
         }
-        if (grid) {
+        if (grid && photos.isEmpty()) {
+            // Not covered by the roots-empty branch above: roots are permission-independent, so
+            // with browsing on and photos denied the phone still returns roots and only the grid
+            // comes back empty. Without this the user sees a blank grid and no reason at all.
+            Text(
+                lastRefusal?.let { "The phone refused: $it." } ?: "No photos on the phone yet.",
+                Modifier.padding(top = 24.dp),
+            )
+        } else if (grid) {
             LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), modifier = Modifier.weight(1f)) {
                 items(photos, key = { it.id }) { item ->
                     Column(Modifier.padding(4.dp)) {
@@ -2204,7 +2222,13 @@ private fun FilesScreen(boot: Boot) {
                 TextButton(onClick = { list(root, path.substringBeforeLast('/', "")) }) { Text("← ${path.ifEmpty { "/" }}") }
             }
             LazyColumn(Modifier.weight(1f)) {
-                items(listing?.entries.orEmpty(), key = { it.name }) { entry ->
+                // Only render a listing that matches where we currently are. Replies are
+                // dispatched per-request on the phone's IO pool, so a slower reply for a
+                // directory we have navigated away from can arrive last — and acting on it
+                // would build paths from this path plus that directory's entry names, which
+                // for a delete could target a same-named file in the wrong folder.
+                val visible = listing?.takeIf { it.root == root && it.path == path }
+                items(visible?.entries.orEmpty(), key = { it.name }) { entry ->
                     val child = if (path.isEmpty()) entry.name else "$path/${entry.name}"
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                         Text(if (entry.dir) "📁" else "📄", Modifier.padding(end = 6.dp))
