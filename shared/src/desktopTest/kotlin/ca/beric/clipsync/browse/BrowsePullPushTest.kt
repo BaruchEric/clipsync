@@ -6,13 +6,16 @@ import ca.beric.clipsync.protocol.MirrorEvent
 import ca.beric.clipsync.sync.RemotePeer
 import ca.beric.clipsync.transfer.FileTransferEngine
 import ca.beric.clipsync.transfer.FolderFileSink
+import ca.beric.clipsync.transfer.TransferState
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
@@ -25,9 +28,13 @@ import kotlin.test.assertTrue
 class BrowsePullPushTest {
 
     private lateinit var root: File
+    private lateinit var transferEngine: FileTransferEngine
 
     /** Completed by whichever fake peer is offered a file — no sleeping, no flakes. */
     private val firstOffer = CompletableDeferred<Pair<String, ControlMessage.FileOffer>>()
+
+    /** Every offer any fake peer received, in arrival order — proves "only", not just "someone". */
+    private val offers = CopyOnWriteArrayList<Pair<String, ControlMessage.FileOffer>>()
 
     // A dedicated scope, NOT the test's own runBlocking scope. FileTransferEngine.init launches
     // a stall watchdog (`while (isActive) { delay(...) }`) that never completes on its own, and
@@ -49,10 +56,14 @@ class BrowsePullPushTest {
             FolderFileSink(Files.createTempDirectory("clipsync-sink").toFile()),
             offerAckTimeoutMs = 50,
         )
+        transferEngine = transfers
         for (id in listOf("mac", "other")) {
             transfers.addPeer(
                 RemotePeer(id, ClipsyncCrypto.randomKey(), send = { msg ->
-                    if (msg is ControlMessage.FileOffer) firstOffer.complete(id to msg)
+                    if (msg is ControlMessage.FileOffer) {
+                        offers.add(id to msg)
+                        firstOffer.complete(id to msg)
+                    }
                 }),
             )
         }
@@ -76,6 +87,17 @@ class BrowsePullPushTest {
         assertEquals("photo.jpg", offer.name)
         assertEquals(9L, offer.size)
         assertEquals("", offer.dest, "a pull must never steer where the Mac writes")
+        // The deferred above only proves someone was offered the file, not that no one else
+        // was — a second complete() on it is a silent no-op. Wait for every attempted send to
+        // reach a terminal state (offerAckTimeoutMs=50, no fake peer ever acks) before asserting
+        // the negative: a fan-out to "other" would leave a second terminal state and a second
+        // entry in `offers`.
+        withTimeout(5_000) {
+            transferEngine.transfers.first { states ->
+                states.isNotEmpty() && states.none { it.status == TransferState.Status.ACTIVE }
+            }
+        }
+        assertEquals(listOf("mac"), offers.map { it.first }, "a pull must reach the requester and no one else")
     }
 
     @Test
