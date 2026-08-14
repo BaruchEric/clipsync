@@ -961,6 +961,10 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
             runCatching { file.delete() }
             for (line in text.lines()) {
                 val parts = line.trim().split(" ", limit = 3)
+                if (parts[0] == "fs-push") {
+                    watchFsPush(scope, boot, parts)
+                    continue
+                }
                 val event = when (parts[0]) {
                     "sms-threads" -> MirrorEvent.SmsQueryThreads
                     "sms-thread" -> parts.getOrNull(1)?.toLongOrNull()?.let { MirrorEvent.SmsQueryThread(it) }
@@ -970,7 +974,6 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
                     "fs-roots" -> MirrorEvent.FsQueryRoots
                     "fs-list" -> if (parts.size >= 2) MirrorEvent.FsQueryList(parts[1], parts.getOrElse(2) { "" }) else null
                     "fs-pull" -> if (parts.size == 3) MirrorEvent.FsPull(parts[1], parts[2]) else null
-                    "fs-push" -> if (parts.size == 3) MirrorEvent.FsPush(parts[1], parts[2]) else null
                     "fs-delete" -> if (parts.size == 3) MirrorEvent.FsDelete(parts[1], listOf(parts[2])) else null
                     "fs-rename" -> if (parts.size == 3 && parts[2].contains(' ')) {
                         // The outer split above is limit=3 (verb, root, rest-of-line), matching
@@ -994,6 +997,49 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
                 println("clipsync: mirror-cmd ${parts[0]} sent=${boot.mirror.send(null, event)}")
             }
         }
+    }
+}
+
+/**
+ * `fs-push <root> <dir> <localfile>`: confirms/creates `<dir>` on the phone via [MirrorEvent.FsPush],
+ * awaits the [MirrorEvent.FsResult], then streams `<localfile>` into it with `dest` set to the
+ * confirmed absolute directory. This is the only production caller of the `dest` branch of
+ * `DispatchingFileSink` (M9 review I5) — without it, that whole confine/claim/publish path had
+ * no way to be exercised outside a unit test.
+ *
+ * The outer split above is `limit = 3` (verb, root, rest-of-line), so `"<dir> <localfile>"`
+ * arrives fused in `parts[2]`; split it from the right, the same way `fs-rename` does — `dir`
+ * may itself contain spaces (a real folder name), and `localfile` is the final token since the
+ * operator typing it can trivially choose one without a space.
+ */
+private fun watchFsPush(scope: CoroutineScope, boot: Boot, parts: List<String>) {
+    if (parts.size != 3 || ' ' !in parts[2]) {
+        println("clipsync: mirror-cmd unrecognized: fs-push ${parts.drop(1).joinToString(" ")}")
+        return
+    }
+    val root = parts[1]
+    val dir = parts[2].substringBeforeLast(' ')
+    val file = File(parts[2].substringAfterLast(' '))
+    if (!file.isFile) {
+        println("clipsync: fs-push: not a local file: ${file.path}")
+        return
+    }
+    val target = boot.connectedPeers.value.firstOrNull()
+    if (target == null) {
+        println("clipsync: fs-push: no connected peer")
+        return
+    }
+    scope.launch {
+        boot.mirror.send(target, MirrorEvent.FsPush(root, dir))
+        val result = withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "push" } }
+        if (result == null || !result.ok) {
+            println("clipsync: fs-push: refused: ${result?.detail ?: "timed out waiting for a reply"}")
+            return@launch
+        }
+        val mime = runCatching { Files.probeContentType(file.toPath()) }.getOrNull() ?: "application/octet-stream"
+        val source = FileSource(file.name, file.length(), mime) { file.inputStream() }
+        val sent = boot.fileEngine.sendFile(source, toDeviceId = target, dest = result.detail)
+        println("clipsync: fs-push: sent=$sent dest=${result.detail}")
     }
 }
 
