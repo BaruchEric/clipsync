@@ -796,16 +796,25 @@ private fun FilesScreen(boot: Boot) {
                 TextButton(onClick = {
                     val paths = confirm
                     confirm = emptyList()
-                    scope.launch {
-                        boot.mirror.send(peer, MirrorEvent.FsDelete(root, paths))
-                        // Await the FsResult before re-listing rather than firing both events
-                        // back to back: the phone dispatches each browse event independently on
-                        // Dispatchers.IO, so a bare fire-and-forget list races the delete and
-                        // usually wins — delete costs many more canonical()/Binder round trips —
-                        // and the pane renders the pre-delete state with no second refresh ever
-                        // coming. A timeout means a lost reply can't wedge the UI.
-                        withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "delete" } }
-                        boot.mirror.send(peer, MirrorEvent.FsQueryList(root, path))
+                    val sendTo = peer
+                    // A null peer must refuse, not fall through to mirror.send(null, …), which
+                    // broadcasts to every connected peer — exactly what I1 exists to prevent.
+                    // "No target known" is a narrower window than a stale null, but it's still a
+                    // window worth closing rather than silently widening the blast radius.
+                    if (sendTo == null) {
+                        refusals = refusals + ("delete" to "no phone connected")
+                    } else {
+                        scope.launch {
+                            boot.mirror.send(sendTo, MirrorEvent.FsDelete(root, paths))
+                            // Await the FsResult before re-listing rather than firing both events
+                            // back to back: the phone dispatches each browse event independently
+                            // on Dispatchers.IO, so a bare fire-and-forget list races the delete
+                            // and usually wins — delete costs many more canonical()/Binder round
+                            // trips — and the pane renders the pre-delete state with no second
+                            // refresh ever coming. A timeout means a lost reply can't wedge the UI.
+                            withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "delete" } }
+                            boot.mirror.send(sendTo, MirrorEvent.FsQueryList(root, path))
+                        }
                     }
                 }) { Text("Move to trash") }
             },
@@ -822,11 +831,18 @@ private fun FilesScreen(boot: Boot) {
             confirmButton = {
                 TextButton(onClick = {
                     renaming = null
-                    scope.launch {
-                        boot.mirror.send(peer, MirrorEvent.FsRename(root, target, name))
-                        // Same race as delete above: await the reply before re-listing.
-                        withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "rename" } }
-                        boot.mirror.send(peer, MirrorEvent.FsQueryList(root, path))
+                    val sendTo = peer
+                    // See the delete handler above: refuse rather than fall through to a
+                    // broadcast send when no peer is known.
+                    if (sendTo == null) {
+                        refusals = refusals + ("rename" to "no phone connected")
+                    } else {
+                        scope.launch {
+                            boot.mirror.send(sendTo, MirrorEvent.FsRename(root, target, name))
+                            // Same race as delete above: await the reply before re-listing.
+                            withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "rename" } }
+                            boot.mirror.send(sendTo, MirrorEvent.FsQueryList(root, path))
+                        }
                     }
                 }) { Text("Rename") }
             },
