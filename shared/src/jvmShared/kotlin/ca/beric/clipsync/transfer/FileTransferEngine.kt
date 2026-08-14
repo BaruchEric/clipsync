@@ -15,6 +15,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -353,7 +354,10 @@ class FileTransferEngine(
     // --- Helpers ---
 
     private fun upsertState(state: TransferState) {
-        _transfers.value = (listOf(state) + _transfers.value.filterNot { it.id == state.id }).take(MAX_STATES)
+        // .update{}, not a read-modify-write on .value: this is called from concurrent
+        // coroutines (one per in-flight transfer), and an unsynchronized read-modify-write can
+        // silently drop an update when two land close together (M9 review I6).
+        _transfers.update { states -> (listOf(state) + states.filterNot { it.id == state.id }).take(MAX_STATES) }
         if (state.status != TransferState.Status.ACTIVE) {
             val dir = if (state.outbound) "send" else "recv"
             val tail = state.detail?.let { " — $it" } ?: ""
