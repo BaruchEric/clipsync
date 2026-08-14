@@ -16,8 +16,10 @@ import rikka.shizuku.Shizuku
 
 /**
  * [FileBridge] backed by [FileBridgeService] running as the SHELL uid. Every call fails
- * closed (empty / false / throw) when the service isn't bound, which is the same posture
- * clipboard capture already takes when Shizuku is stopped.
+ * closed (empty / false / throw) when the service isn't bound, and equally when a bound
+ * call throws — the binder can die between a call and the disconnect callback landing,
+ * which is routine (Shizuku restarts on every phone reboot). Same posture clipboard
+ * capture already takes when Shizuku is stopped.
  */
 class ShizukuFileBridge(context: Context) : FileBridge {
 
@@ -51,32 +53,43 @@ class ShizukuFileBridge(context: Context) : FileBridge {
 
     fun isReady(): Boolean = service != null
 
-    // Null when the service isn't bound. Echoing the input path back would hand BrowseEngine
-    // an unresolved string to confine against — the same bypass the JVM bridge avoids.
-    override fun canonical(path: String): String? = service?.canonical(path)
+    // Null when the service isn't bound, or when the call throws. Echoing the input path back
+    // would hand BrowseEngine an unresolved string to confine against — the same bypass the
+    // JVM bridge avoids.
+    override fun canonical(path: String): String? = call { service?.canonical(path) }
 
     override fun list(dir: String): List<FsEntry> =
-        service?.list(dir)?.mapNotNull { parseRow(it) } ?: emptyList()
+        call { service?.list(dir)?.mapNotNull { parseRow(it) } } ?: emptyList()
 
-    override fun stat(path: String): FsEntry? = service?.stat(path)?.let { parseRow(it) }
+    override fun stat(path: String): FsEntry? = call { service?.stat(path)?.let { parseRow(it) } }
 
-    override fun exists(path: String): Boolean = service?.exists(path) ?: false
+    override fun exists(path: String): Boolean = call { service?.exists(path) } ?: false
 
     override fun open(path: String): InputStream {
-        val fd = service?.open(path) ?: throw IOException("file bridge unavailable")
+        val fd = call { service?.open(path) } ?: throw IOException("file bridge unavailable")
         return ParcelFileDescriptor.AutoCloseInputStream(fd).buffered()
     }
 
     override fun create(path: String): OutputStream {
-        val fd = service?.create(path) ?: throw IOException("file bridge unavailable")
+        val fd = call { service?.create(path) } ?: throw IOException("file bridge unavailable")
         return ParcelFileDescriptor.AutoCloseOutputStream(fd).buffered()
     }
 
-    override fun move(from: String, to: String): Boolean = service?.move(from, to) ?: false
+    override fun move(from: String, to: String): Boolean = call { service?.move(from, to) } ?: false
 
-    override fun delete(path: String): Boolean = service?.delete(path) ?: false
+    override fun delete(path: String): Boolean = call { service?.delete(path) } ?: false
 
-    override fun mkdirs(path: String): Boolean = service?.mkdirs(path) ?: false
+    override fun mkdirs(path: String): Boolean = call { service?.mkdirs(path) } ?: false
+
+    /**
+     * Every AIDL method is declared `throws RemoteException`, and DeadObjectException extends
+     * it — the service dies whenever Shizuku restarts, which happens on every phone reboot.
+     * A throw here would escape onto the transport reader coroutine and could drop the peer
+     * link, so a dead binder must degrade to the same answer an unbound one gives.
+     */
+    private fun <T> call(body: () -> T?): T? = runCatching { body() }
+        .onFailure { Log.w(TAG, "file bridge call failed: ${it.javaClass.simpleName}: ${it.message}") }
+        .getOrNull()
 
     /** "name\tsize\tdir\tmtime" — the service's wire row. */
     private fun parseRow(row: String): FsEntry? {
