@@ -14,7 +14,13 @@ import java.net.URLConnection
  * [open] MUST be re-invokable: FileTransferEngine reads a source twice (hash, then stream).
  */
 interface FileBridge {
-    fun canonical(path: String): String
+    /**
+     * Fully resolved path — symlinks and `..` collapsed — or **null when resolution failed**.
+     * Null is load-bearing: [BrowseEngine] confines by comparing canonical paths, and an
+     * unresolved path is not safely comparable (a raw string can still start with the root
+     * prefix while containing `..`). Callers must treat null as deny, never as fall-through.
+     */
+    fun canonical(path: String): String?
     fun list(dir: String): List<FsEntry>
     fun stat(path: String): FsEntry?
     fun exists(path: String): Boolean
@@ -28,8 +34,8 @@ interface FileBridge {
 /** Plain java.io implementation: the desktop's own filesystem, and every unit test. */
 class JvmFileBridge : FileBridge {
 
-    override fun canonical(path: String): String =
-        runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+    override fun canonical(path: String): String? =
+        runCatching { File(path).canonicalPath }.getOrNull()
 
     override fun list(dir: String): List<FsEntry> =
         File(dir).listFiles()?.map { it.toEntry() } ?: emptyList()

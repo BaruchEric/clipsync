@@ -49,6 +49,19 @@ class JvmFileBridgeTest {
     }
 
     @Test
+    fun canonicalReturnsNullWhenResolutionFails() {
+        // A symlink cycle makes canonicalPath throw (ELOOP). Returning an unresolved path here
+        // would be a confinement bypass: BrowseEngine compares canonical paths, and a raw
+        // string can start with the root prefix while still containing "..".
+        val dir = tempDir()
+        val a = File(dir, "a")
+        val b = File(dir, "b")
+        Files.createSymbolicLink(a.toPath(), b.toPath())
+        Files.createSymbolicLink(b.toPath(), a.toPath())
+        assertNull(bridge.canonical(File(a, "child.txt").absolutePath))
+    }
+
+    @Test
     fun moveRenamesAndCreateWritesThroughMkdirs() {
         val dir = tempDir()
         assertTrue(bridge.mkdirs(File(dir, "deep/er").absolutePath))
