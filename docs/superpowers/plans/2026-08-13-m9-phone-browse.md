@@ -2032,11 +2032,18 @@ private fun BrowseCard(activity: ComponentActivity) {
     val askMedia = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
     SetupCard(
         title = "Let a paired Mac browse my files",
+        // Consent copy. Name the write capability explicitly: FsPush lets a paired Mac add
+        // files to this phone with no per-push confirmation, and "copy" alone reads as pulling
+        // files off. The off-state text is what someone reads *before* granting, so it carries
+        // the full disclosure. Avoid claiming trashed items "can be restored" — they are moved
+        // rather than erased, but no restore UI exists.
         body = if (on) {
-            "On. A paired Mac can browse, copy, rename, and trash files on this phone. " +
-                "Deleted items move to .clipsync-trash and can be restored."
+            "On. A paired Mac can browse this phone's files and photos, copy them off, add new " +
+                "ones, rename, and trash. Deleted items move to .clipsync-trash rather than " +
+                "being erased."
         } else {
-            "Off. Turn this on to browse this phone's photos and files from the desktop app."
+            "Off. Turn this on to let a paired Mac browse this phone's photos and files — and " +
+                "copy, add, rename, or trash them."
         },
         actionLabel = if (on) "Turn off" else "Turn on",
         onAction = {
@@ -2131,6 +2138,11 @@ private fun FilesScreen(boot: Boot) {
     var grid by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<List<String>>(emptyList()) }
     var renaming by remember { mutableStateOf<String?>(null) }
+    // The most recent refusal reason from the phone, so empty states can name the real cause.
+    var lastRefusal by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        boot.fsResults.collect { if (!it.ok) lastRefusal = it.detail.ifBlank { null } }
+    }
 
     fun list(r: String, p: String) {
         root = r
@@ -2159,8 +2171,13 @@ private fun FilesScreen(boot: Boot) {
             TextButton(onClick = { grid = !grid }) { Text(if (grid) "Files" else "Photos") }
         }
         if (roots.isEmpty()) {
+            // Say why, don't guess. The phone distinguishes "browsing disabled" from "photo
+            // permission not granted" and sends the reason in FsResult.detail; an empty list
+            // cannot tell those apart, and telling someone they have no photos when they
+            // actually denied a permission sends them to the wrong settings screen.
             Text(
-                "No storage offered yet.\nOn the phone, turn on \"Let a paired Mac browse my files\".",
+                lastRefusal?.let { "The phone refused: $it." }
+                    ?: "No storage offered yet.\nOn the phone, turn on \"Let a paired Mac browse my files\".",
                 Modifier.padding(top = 24.dp),
             )
             return@Column
