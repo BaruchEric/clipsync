@@ -1880,23 +1880,38 @@ class DispatchingFileSink(
 In `AppGraph.kt`, add fields beside `private var mirrorEngine: MirrorEngine? = null`:
 
 ```kotlin
+    @Volatile
     private var browseEngine: BrowseEngine? = null
+
+    @Volatile
     private var fileBridge: ShizukuFileBridge? = null
+
+    @Volatile
     private var mediaIndex: MediaIndex? = null
 ```
 
 Then, inside `startSync`, replace the `files` construction (currently `FileTransferEngine(scope, MediaStoreFileSink(appContext), …)`) with:
 
 ```kotlin
-            val bridge = ShizukuFileBridge(appContext).also { it.bind(); fileBridge = it }
+            // Bind only if the user has actually consented. This spawns a SHELL-uid helper
+            // process — the app's first persistent one — and standing it up for someone who
+            // never turned browsing on is exactly what the toggle exists to prevent. The
+            // startup bind covers the already-consented case so the first request is ready;
+            // ensureFileBridgeBound() below covers the moment consent is granted.
+            val bridge = ShizukuFileBridge(appContext).also {
+                fileBridge = it
+                if (BrowsePrefs.enabled(appContext)) it.bind()
+            }
             // Shizuku's user service dies whenever Shizuku restarts, which happens on every
             // phone reboot. bind() at startup alone would leave browsing silently dead until
             // the app is relaunched, so re-bind whenever Shizuku's binder comes back.
             Shizuku.addBinderReceivedListener {
-                Log.i(TAG, "shizuku binder received; rebinding file bridge")
-                fileBridge?.bind()
+                if (BrowsePrefs.enabled(appContext)) {
+                    Log.i(TAG, "shizuku binder received; rebinding file bridge")
+                    fileBridge?.bind()
+                }
             }
-            val media = MediaIndex(appContext).also { mediaIndex = it }
+            mediaIndex = MediaIndex(appContext)
             val roots = listOf(
                 BrowseRoot("internal", "Internal storage", Environment.getExternalStorageDirectory().absolutePath),
                 BrowseRoot("download", "Download", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath),
@@ -1937,7 +1952,7 @@ In `handleMirrorEvent`, add before the terminal `is MirrorEvent.NotifPosted, …
             // Three outcomes, not two: "browsing off", "photos not granted", and real data.
             // An empty MediaItems would collapse the middle case into "you have no photos",
             // and the desktop's Files tab is specified to name the actual cause.
-            is MirrorEvent.MediaQuery -> scope.launch {
+            is MirrorEvent.MediaQuery -> scope.launch(Dispatchers.IO) {
                 val index = mediaIndex
                 val reply = when {
                     !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("media", false, "browsing disabled")
@@ -1947,7 +1962,7 @@ In `handleMirrorEvent`, add before the terminal `is MirrorEvent.NotifPosted, …
                 }
                 mirrorEngine?.send(from, reply)
             }
-            is MirrorEvent.ThumbQuery -> scope.launch {
+            is MirrorEvent.ThumbQuery -> scope.launch(Dispatchers.IO) {
                 val index = mediaIndex
                 val reply = when {
                     !BrowsePrefs.enabled(context) -> MirrorEvent.FsResult("thumbs", false, "browsing disabled")
@@ -1958,7 +1973,7 @@ In `handleMirrorEvent`, add before the terminal `is MirrorEvent.NotifPosted, …
                 mirrorEngine?.send(from, reply)
             }
             is MirrorEvent.FsQueryRoots, is MirrorEvent.FsQueryList, is MirrorEvent.FsPull,
-            is MirrorEvent.FsPush, is MirrorEvent.FsDelete, is MirrorEvent.FsRename -> scope.launch {
+            is MirrorEvent.FsPush, is MirrorEvent.FsDelete, is MirrorEvent.FsRename -> scope.launch(Dispatchers.IO) {
                 browseEngine?.onEvent(from, event)?.let { mirrorEngine?.send(from, it) }
             }
 ```
@@ -2028,7 +2043,13 @@ private fun BrowseCard(activity: ComponentActivity) {
             val next = !on
             BrowsePrefs.setEnabled(activity, next)
             on = next
-            if (next) askMedia.launch(MediaIndex.PERMISSIONS)
+            if (next) {
+                askMedia.launch(MediaIndex.PERMISSIONS)
+                // Bind the SHELL-uid bridge now. The bridge is only bound when browsing is on,
+                // so without this the first browse after enabling would fail until the app was
+                // relaunched. Reach AppGraph the same way the neighbouring cards do.
+                ClipsyncApp.graph.ensureFileBridgeBound(activity)
+            }
         },
     )
 }
