@@ -95,6 +95,21 @@ class BrowseEngineMutationTest {
     }
 
     @Test
+    fun deleteRefusesWhenTheTrashIsASymlinkOutOfTheRoot() = runBlocking {
+        // Not reachable by the remote peer (the protocol has no symlink-creating op), but the
+        // destination of a destructive move must be confined the same way its source is.
+        val e = engine(this)
+        val outside = Files.createTempDirectory("clipsync-outside-trash").toFile()
+        Files.createSymbolicLink(File(root, BrowseEngine.TRASH_DIR).toPath(), outside.toPath())
+        File(root, "doc.txt").writeText("keepable")
+        val reply = e.onEvent("peer", MirrorEvent.FsDelete("r", listOf("doc.txt"))) as MirrorEvent.FsResult
+        assertFalse(reply.ok)
+        assertEquals("trash rejected", reply.detail)
+        assertTrue(File(root, "doc.txt").exists(), "the file must not have moved")
+        assertEquals(0, outside.listFiles()!!.size, "nothing may land outside the root")
+    }
+
+    @Test
     fun renameWorksWithinTheDirectory() = runBlocking {
         val e = engine(this)
         File(root, "old.txt").writeText("x")

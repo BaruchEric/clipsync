@@ -99,7 +99,11 @@ class BrowseEngine(
      */
     private fun onDelete(req: MirrorEvent.FsDelete): MirrorEvent {
         val rootPath = resolve(req.root, "") ?: return MirrorEvent.FsResult("delete", false, "path rejected")
-        val trash = "$rootPath/$TRASH_DIR"
+        // Confine the trash directory itself, exactly as onRename confines its target. A
+        // symlinked .clipsync-trash would otherwise be followed by mkdirs/renameTo and land
+        // deleted files outside the root — the destination has to be checked, not assumed.
+        val trash = confineAbsolute("$rootPath/$TRASH_DIR")
+            ?: return MirrorEvent.FsResult("delete", false, "trash rejected")
         val stamp = STAMP.format(Instant.ofEpochMilli(clock()).atZone(ZoneId.systemDefault()))
         var moved = 0
         for (rel in req.paths) {
@@ -114,7 +118,12 @@ class BrowseEngine(
             var n = 1
             while (bridge.exists(target)) target = "$trash/$stamp-$n-$name".also { n++ }
             if (!bridge.move(abs, target)) {
-                return MirrorEvent.FsResult("delete", false, "could not move $name to the trash")
+                // Name what already moved: a batch that fails partway has genuinely trashed
+                // the earlier entries, and a bare ok=false would leave the peer unable to tell.
+                return MirrorEvent.FsResult(
+                    "delete", false,
+                    "moved $moved of ${req.paths.size}; failed on $name",
+                )
             }
             moved++
         }
