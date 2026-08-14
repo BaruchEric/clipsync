@@ -167,6 +167,12 @@ fun main() {
         val mediaItems = MutableStateFlow(emptyList<MediaItem>())
         val thumbs = MutableStateFlow(emptyMap<Long, String>())
         val fsResults = MutableSharedFlow<MirrorEvent.FsResult>(extraBufferCapacity = 16)
+        // Monotonic "a reply arrived" counters. Needed because neither payload can carry that
+        // signal on its own: MediaItems(emptyList()) is a legitimate success that looks empty,
+        // and FsEntries is a data class, so re-listing an unchanged directory produces a value
+        // == the cached one, which MutableStateFlow conflates and never re-emits.
+        val fsEpoch = MutableStateFlow(0)
+        val mediaEpoch = MutableStateFlow(0)
         val mirrorEngine = MirrorEngine(
             onEvent = { _, event ->
                 when (event) {
@@ -185,8 +191,14 @@ fun main() {
                     }
                     is MirrorEvent.SmsSent -> println("clipsync: sms send ok=${event.ok}")
                     is MirrorEvent.FsRoots -> fsRoots.value = event.roots
-                    is MirrorEvent.FsEntries -> fsEntries.value = event
-                    is MirrorEvent.MediaItems -> mediaItems.value = event.items
+                    is MirrorEvent.FsEntries -> {
+                        fsEntries.value = event
+                        fsEpoch.value += 1
+                    }
+                    is MirrorEvent.MediaItems -> {
+                        mediaItems.value = event.items
+                        mediaEpoch.value += 1
+                    }
                     is MirrorEvent.Thumbs -> thumbs.value = thumbs.value + event.jpegB64
                     is MirrorEvent.FsResult -> {
                         println("clipsync: fs ${event.op} ok=${event.ok} ${event.detail}")
@@ -248,7 +260,7 @@ fun main() {
         Boot(
             engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload,
             mirrorEngine, phoneNotifs, notifPings, smsThreads, smsMessages,
-            fsRoots, fsEntries, mediaItems, thumbs, fsResults,
+            fsRoots, fsEntries, mediaItems, thumbs, fsResults, fsEpoch, mediaEpoch,
         )
     }
 
@@ -358,6 +370,8 @@ private class Boot(
     val mediaItems: StateFlow<List<MediaItem>>,
     val thumbs: StateFlow<Map<Long, String>>,
     val fsResults: MutableSharedFlow<MirrorEvent.FsResult>,
+    val fsEpoch: StateFlow<Int>,
+    val mediaEpoch: StateFlow<Int>,
 )
 
 /** Streams [file] to every connected peer; logs instead of throwing (UI shows the state). */
@@ -598,6 +612,8 @@ private fun FilesScreen(boot: Boot) {
     val listing by boot.fsEntries.collectAsState()
     val photos by boot.mediaItems.collectAsState()
     val thumbs by boot.thumbs.collectAsState()
+    val fsEpoch by boot.fsEpoch.collectAsState()
+    val mediaEpoch by boot.mediaEpoch.collectAsState()
     var root by remember { mutableStateOf("") }
     var path by remember { mutableStateOf("") }
     var grid by remember { mutableStateOf(false) }
@@ -614,9 +630,13 @@ private fun FilesScreen(boot: Boot) {
         }
     }
     // A successful roots/listing/media reply is not an FsResult, so clear those here instead.
+    // Cleared on the epoch counters, not the payloads: MediaItems(emptyList()) is a legitimate
+    // success that photos.isNotEmpty() would misread as nothing, and FsEntries is a data class,
+    // so re-listing an unchanged directory produces a value == the cached one that
+    // MutableStateFlow conflates and listing never re-emits.
     LaunchedEffect(roots) { if (roots.isNotEmpty()) refusals = refusals - "roots" }
-    LaunchedEffect(listing) { if (listing != null) refusals = refusals - "list" }
-    LaunchedEffect(photos) { if (photos.isNotEmpty()) refusals = refusals - "media" - "thumbs" }
+    LaunchedEffect(fsEpoch) { if (fsEpoch > 0) refusals = refusals - "list" }
+    LaunchedEffect(mediaEpoch) { if (mediaEpoch > 0) refusals = refusals - "media" - "thumbs" }
     val browseRefusal = refusals["roots"] ?: refusals["list"]
     val photoRefusal = refusals["media"] ?: refusals["thumbs"]
     val actionRefusal = refusals["delete"] ?: refusals["rename"] ?: refusals["pull"] ?: refusals["push"]
