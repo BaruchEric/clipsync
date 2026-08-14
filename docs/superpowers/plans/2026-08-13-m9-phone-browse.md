@@ -603,11 +603,16 @@ class BrowseEngine(
         }
     }
 
-    /** Absolute canonical path for [rel] under [rootId], or null when it escapes the root. */
+    /**
+     * Absolute canonical path for [rel] under [rootId], or null when it escapes the root.
+     * A rooted path ("/etc/passwd") is refused outright rather than quietly re-rooted under
+     * the browse root — a client that sends one has a bug, and an error names it.
+     */
     fun resolve(rootId: String, rel: String): String? {
         val root = roots.firstOrNull { it.id == rootId } ?: return null
+        val trimmed = rel.trim()
+        if (trimmed.startsWith("/") || trimmed.startsWith("\\")) return null
         val rootCanon = bridge.canonical(root.path)
-        val trimmed = rel.trim().trimStart('/')
         val joined = if (trimmed.isEmpty()) rootCanon else "$rootCanon/$trimmed"
         val canon = bridge.canonical(joined)
         return if (canon == rootCanon || canon.startsWith("$rootCanon/")) canon else null
@@ -906,6 +911,7 @@ git commit -m "feat(browse): reversible trash-first delete and same-directory re
 **Files:**
 - Modify: `shared/src/jvmShared/kotlin/ca/beric/clipsync/transfer/FileTransferEngine.kt:124-142`, `:232`
 - Modify: `shared/src/jvmShared/kotlin/ca/beric/clipsync/transfer/FileTransfer.kt` (the `FileSink` interface and `FolderFileSink`)
+- Modify: `androidApp/src/main/kotlin/ca/beric/clipsync/android/transfer/MediaStoreFileSink.kt:23` (the override must widen with the interface)
 - Test: `shared/src/desktopTest/kotlin/ca/beric/clipsync/transfer/FileTransferTargetingTest.kt`
 
 **Interfaces:**
@@ -982,7 +988,10 @@ class FileTransferTargetingTest {
         val pending = sink.begin("safe.txt", "text/plain", dest = "/etc")
         pending.stream.write("x".encodeToByteArray())
         val where = pending.publish()
-        assertTrue(where.startsWith(dir.canonicalPath), "wrote outside the sink folder: $where")
+        // absolutePath, not canonicalPath: publish() returns the former, and on macOS a temp
+        // dir is /var/... absolute but /private/var/... canonical. The subject here is "did
+        // dest steer the write", not path normalization.
+        assertTrue(where.startsWith(dir.absolutePath), "wrote outside the sink folder: $where")
         assertTrue(File(dir, "safe.txt").exists())
     }
 }
@@ -1014,6 +1023,17 @@ interface FileSink {
 ```
 
 (the body is unchanged — `dest` is deliberately unused here.)
+
+**Every existing implementor must widen too, or `:androidApp` stops compiling.** In
+`androidApp/src/main/kotlin/ca/beric/clipsync/android/transfer/MediaStoreFileSink.kt`, change
+the override the same way:
+
+```kotlin
+    override fun begin(name: String, mime: String, dest: String): PendingFile {
+```
+
+Its body is unchanged as well — routing on `dest` is Task 9's `DispatchingFileSink`, not this
+class. Callers that pass two arguments keep compiling: the default lives on the interface.
 
 - [ ] **Step 4: Add targeting and `dest` to the engine**
 
@@ -1054,10 +1074,10 @@ and the receive side at `onOffer`:
 Run: `./gradlew :shared:desktopTest --tests '*FileTransferTargetingTest*'`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 6: Verify no existing caller broke**
+- [ ] **Step 6: Verify no existing caller broke — including Android**
 
-Run: `./gradlew :shared:desktopTest`
-Expected: PASS. The new parameters all have defaults, so `sendFile(source)` and `begin(name, mime)` still compile everywhere.
+Run: `./gradlew :shared:desktopTest :androidApp:assembleDebug`
+Expected: both PASS. The new parameters have defaults, so *call sites* like `sendFile(source)` and `begin(name, mime)` compile untouched — but an `override` must match the widened signature exactly, which is why `MediaStoreFileSink` changed in Step 3. Building `:androidApp` here is what proves no implementor was missed; `:shared:desktopTest` alone would not catch it.
 
 - [ ] **Step 7: Commit**
 
