@@ -877,7 +877,11 @@ Add the implementations, plus the imports `java.time.Instant`, `java.time.ZoneId
      */
     private fun onDelete(req: MirrorEvent.FsDelete): MirrorEvent {
         val rootPath = resolve(req.root, "") ?: return MirrorEvent.FsResult("delete", false, "path rejected")
-        val trash = "$rootPath/$TRASH_DIR"
+        // Confine the trash directory itself, exactly as onRename confines its target. A
+        // symlinked .clipsync-trash would otherwise be followed by mkdirs/renameTo and land
+        // deleted files outside the root — the destination has to be checked, not assumed.
+        val trash = confineAbsolute("$rootPath/$TRASH_DIR")
+            ?: return MirrorEvent.FsResult("delete", false, "trash rejected")
         val stamp = STAMP.format(Instant.ofEpochMilli(clock()).atZone(ZoneId.systemDefault()))
         var moved = 0
         for (rel in req.paths) {
@@ -892,7 +896,12 @@ Add the implementations, plus the imports `java.time.Instant`, `java.time.ZoneId
             var n = 1
             while (bridge.exists(target)) target = "$trash/$stamp-$n-$name".also { n++ }
             if (!bridge.move(abs, target)) {
-                return MirrorEvent.FsResult("delete", false, "could not move $name to the trash")
+                // Name what already moved: a batch that fails partway has genuinely trashed
+                // the earlier entries, and a bare ok=false would leave the peer unable to tell.
+                return MirrorEvent.FsResult(
+                    "delete", false,
+                    "moved $moved of ${req.paths.size}; failed on $name",
+                )
             }
             moved++
         }
@@ -1239,6 +1248,27 @@ class BrowsePullPushTest {
         val reply = e.onEvent("mac", MirrorEvent.FsPush("r", "../elsewhere")) as MirrorEvent.FsResult
         assertFalse(reply.ok)
         assertEquals("path rejected", reply.detail)
+    }
+
+    @Test
+    fun confineAbsoluteRejectsASiblingSharingTheRootsNamePrefix() {
+        // confineAbsolute() carries the same startsWith("$rootCanon/") construct resolve() does,
+        // and it is what guards an inbound push destination. Task 3 covered the separator bug
+        // for resolve() only; this covers it for the write path, where getting it wrong means
+        // a received file lands outside the browse root entirely.
+        val parent = Files.createTempDirectory("clipsync-confine").toFile()
+        val theRoot = File(parent, "browse").apply { mkdirs() }
+        File(parent, "browse-evil").apply { mkdirs() }
+        val e = BrowseEngine(
+            scope = CoroutineScope(EmptyCoroutineContext),
+            bridge = JvmFileBridge(),
+            roots = listOf(BrowseRoot("r", "Root", theRoot.absolutePath)),
+            enabled = { true },
+            clock = { 1_700_000_000_000L },
+        )
+        assertNull(e.confineAbsolute(File(parent, "browse-evil").canonicalPath))
+        // Positive control, so the null above is confinement and not a blanket refusal.
+        assertEquals(theRoot.canonicalPath, e.confineAbsolute(theRoot.canonicalPath))
     }
 }
 ```
