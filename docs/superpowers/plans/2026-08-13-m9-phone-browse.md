@@ -21,6 +21,8 @@
 - Wire compatibility is non-negotiable: a 0.3.x peer must keep full clipboard/file sync against a 0.4.0 peer. New `MirrorEvent` subtypes already decode to null and drop; new `FileOffer` fields must have defaults.
 - The desktop **never** honors a peer-supplied destination path. `dest` steers writes on the phone only.
 - Version bumps to `0.4.0` / `versionCode = 5` in the final task, not before.
+- **Never enable `sun.io.useCanonCaches` or `sun.io.useCanonPrefixCache`** in this project's JVM args. Confinement rests on `File.canonicalPath` being authoritative; those caches are off by default on JDK 17, and turning them on would let a stale symlink mapping be compared against.
+- **Writes must not follow symlinks on the final component.** A push destination does not exist at resolve time, so it cannot be a symlink then — but `File(path).outputStream()` follows one planted in the check-to-use window. Any code that creates a received file opens it with `Files.newOutputStream(path, CREATE_NEW, WRITE, LinkOption.NOFOLLOW_LINKS)`. `renameTo` (the trash move) does not follow its final component and needs no change.
 
 ---
 
@@ -781,6 +783,19 @@ class BrowseEngineMutationTest {
     }
 
     @Test
+    fun theTrashIsHiddenFromListingsButStillAddressable() = runBlocking {
+        // A stated decision, not an accident: the trash is omitted from FsEntries so it does
+        // not read as an ordinary folder, but resolve() still accepts its path — a restore
+        // flow needs to be able to name it. Pin both halves so neither drifts silently.
+        val e = engine(this)
+        trash().mkdirs()
+        File(trash(), "old.txt").writeText("archived")
+        val listing = e.onEvent("peer", MirrorEvent.FsQueryList("r", "")) as MirrorEvent.FsEntries
+        assertTrue(listing.entries.none { it.name == BrowseEngine.TRASH_DIR })
+        assertEquals(trash().canonicalPath, e.resolve("r", BrowseEngine.TRASH_DIR))
+    }
+
+    @Test
     fun deleteRefusesToTrashTheTrash() = runBlocking {
         val e = engine(this)
         trash().mkdirs()
@@ -1278,15 +1293,46 @@ Add, with `import ca.beric.clipsync.transfer.FileSource` and `import kotlinx.cor
 Run: `./gradlew :shared:desktopTest --tests '*BrowsePullPushTest*'`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Run the whole suite**
+- [ ] **Step 5: Harden `create()` against a symlinked final component**
+
+A push destination does not exist when `resolve()` checks it, so it cannot be a symlink *then* — but `File(path).outputStream()` follows one planted between the check and the write, redirecting a received file anywhere the process can write. Task 6 is where push becomes reachable, so it is where this closes. In `shared/src/jvmShared/kotlin/ca/beric/clipsync/browse/FileBridge.kt`, change `JvmFileBridge.create` (and document the contract on the interface method):
+
+```kotlin
+    override fun create(path: String): OutputStream =
+        Files.newOutputStream(
+            File(path).toPath(),
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+            LinkOption.NOFOLLOW_LINKS,
+        ).buffered()
+```
+
+with `import java.nio.file.Files`, `java.nio.file.LinkOption`, `java.nio.file.StandardOpenOption`. `CREATE_NEW` also makes "the file already exists" an error rather than a silent overwrite, which is what a receive path wants. Add the covering test:
+
+```kotlin
+    @Test
+    fun createRefusesToWriteThroughASymlink() {
+        val dir = Files.createTempDirectory("clipsync-nofollow").toFile()
+        val outside = File(Files.createTempDirectory("clipsync-target").toFile(), "victim.txt")
+        outside.writeText("original")
+        val planted = File(dir, "incoming.bin")
+        Files.createSymbolicLink(planted.toPath(), outside.toPath())
+        assertFailsWith<java.io.IOException> { JvmFileBridge().create(planted.absolutePath) }
+        assertEquals("original", outside.readText(), "a planted symlink redirected the write")
+    }
+```
+
+(`import kotlin.test.assertFailsWith` in `JvmFileBridgeTest.kt`.) Note `FolderFileSink` writes through `File.createTempFile` + `renameTo`, which is already safe; this change is for the `FileBridge` write path that Task 9's `DispatchingFileSink` uses.
+
+- [ ] **Step 6: Run the whole suite**
 
 Run: `./gradlew :shared:desktopTest`
-Expected: PASS. Total should now be 75 + 3 + 6 + 10 + 9 + 4 + 6 = 113, 1 skipped (Task 2 carries 6 tests, not 5, after the `canonical` fix round).
+Expected: PASS. Total should now be 75 + 3 + 7 + 12 + 10 + 4 + 6 = 117, 1 skipped (Tasks 2 and 3 grew by their fix rounds; Task 4 gained the trash-addressability test).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add shared/src/jvmShared/kotlin/ca/beric/clipsync/browse/BrowseEngine.kt shared/src/desktopTest/kotlin/ca/beric/clipsync/browse/BrowsePullPushTest.kt
+git add shared/src/jvmShared/kotlin/ca/beric/clipsync/browse/ shared/src/desktopTest/kotlin/ca/beric/clipsync/browse/
 git commit -m "feat(browse): pull a file to the requester, confirm a push destination"
 ```
 
@@ -1347,6 +1393,8 @@ interface IFileBridge {
 package ca.beric.clipsync.android.browse
 
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import java.io.File
 
 /**
@@ -1370,13 +1418,21 @@ class FileBridgeService : IFileBridge.Stub() {
         ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
     }.getOrNull()
 
+    /**
+     * O_CREAT|O_EXCL|O_NOFOLLOW in one syscall. A symlink planted at the destination between
+     * confinement and write would otherwise redirect a received file — and this write runs as
+     * the SHELL uid, so the blast radius is the whole filesystem. It must be one atomic open:
+     * creating the file and then reopening it by path leaves the same race in a smaller window.
+     * O_EXCL also makes "already exists" an error instead of a silent overwrite.
+     */
     override fun create(path: String): ParcelFileDescriptor? = runCatching {
-        val f = File(path)
-        f.parentFile?.mkdirs()
-        ParcelFileDescriptor.open(
-            f,
-            ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_WRITE_ONLY,
+        File(path).parentFile?.mkdirs()
+        val fd = Os.open(
+            path,
+            OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW,
+            DEFAULT_FILE_MODE,
         )
+        ParcelFileDescriptor.dup(fd).also { Os.close(fd) }
     }.getOrNull()
 
     override fun move(from: String, to: String): Boolean =
@@ -1388,6 +1444,11 @@ class FileBridgeService : IFileBridge.Stub() {
 
     private fun File.row(): String =
         listOf(name, if (isDirectory) 0L else length(), isDirectory, lastModified()).joinToString("\t")
+
+    private companion object {
+        /** rw-rw---- : the shell uid writes, the media scanner's group reads. */
+        const val DEFAULT_FILE_MODE = 432 // 0660
+    }
 }
 ```
 
