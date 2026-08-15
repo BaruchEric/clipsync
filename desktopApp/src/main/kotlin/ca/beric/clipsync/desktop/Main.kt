@@ -65,6 +65,7 @@ import ca.beric.clipsync.db.DriverFactory
 import ca.beric.clipsync.identity.DeviceIdentity
 import ca.beric.clipsync.identity.SecretStore
 import ca.beric.clipsync.mirror.MirrorEngine
+import ca.beric.clipsync.protocol.FsEntry
 import ca.beric.clipsync.protocol.FsRoot
 import ca.beric.clipsync.protocol.MediaItem
 import ca.beric.clipsync.protocol.MirrorEvent
@@ -192,16 +193,30 @@ fun main() {
                         println("clipsync: sms thread ${event.threadId}: ${event.messages.size} messages")
                     }
                     is MirrorEvent.SmsSent -> println("clipsync: sms send ok=${event.ok}")
-                    is MirrorEvent.FsRoots -> fsRoots.value = event.roots
+                    is MirrorEvent.FsRoots -> {
+                        fsRoots.value = event.roots
+                        println("clipsync: fs roots: ${event.roots.size} [${event.roots.joinToString(",") { it.id }}]")
+                    }
                     is MirrorEvent.FsEntries -> {
                         fsEntries.value = event
                         fsEpoch.value += 1
+                        val dirs = event.entries.count { it.dir }
+                        println(
+                            "clipsync: fs entries ${event.root}/${event.path}: ${event.entries.size}" +
+                                " ($dirs dirs, ${event.entries.size - dirs} files)${logSample(event.entries)}"
+                        )
                     }
                     is MirrorEvent.MediaItems -> {
                         mediaItems.value = event.items
                         mediaEpoch.value += 1
+                        println("clipsync: media items: ${event.items.size}")
                     }
-                    is MirrorEvent.Thumbs -> thumbs.value = thumbs.value + event.jpegB64
+                    // .update, not `value = value + …`: this is the read-modify-write shape that
+                    // review I6 promoted from a deferred minor after it was found on _transfers.
+                    is MirrorEvent.Thumbs -> {
+                        thumbs.update { it + event.jpegB64 }
+                        println("clipsync: media thumbs: +${event.jpegB64.size}")
+                    }
                     is MirrorEvent.FsResult -> {
                         println("clipsync: fs ${event.op} ok=${event.ok} ${event.detail}")
                         fsResults.tryEmit(event)
@@ -962,10 +977,34 @@ private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine)
     }
 }
 
+/** Entry names shown per listing in the log — enough to identify a file, not enough to flood. */
+private const val LOG_SAMPLE = 8
+
+private val CONTROL_CHARS = Regex("\\p{Cntrl}")
+
+/**
+ * A few entry names for the harness log. `fs-roots`, `fs-list` and `media` answer into StateFlows
+ * that only the Files tab reads, and this is a menu-bar app whose window does not exist until the
+ * status item is clicked — so without these lines an adb-driven session can see that a query was
+ * *sent* and never what came back. Names are sanitized because a filename may legally contain a
+ * newline or tab, which would break a line-oriented log exactly as a tab broke the file-bridge
+ * wire format (M9 Task 7).
+ */
+private fun logSample(entries: List<FsEntry>): String {
+    if (entries.isEmpty()) return ""
+    val shown = entries.take(LOG_SAMPLE)
+        .joinToString(", ") { it.name.replace(CONTROL_CHARS, " ") + if (it.dir) "/" else "" }
+    return " — $shown" + if (entries.size > LOG_SAMPLE) ", …" else ""
+}
+
 /**
  * Polls ~/.clipsync/mirror-cmd.txt (consumed once read): harness hook for the mirror paths.
  * Lines: "sms-threads" | "sms-thread <id>" | "sms-send <to> <body…>" | "notif-reply <text…>"
  * — notif-reply targets the newest reply-capable notification. The tabs are the real UI.
+ *
+ * M9 adds: "fs-roots" | "fs-list <root> [path]" | "fs-pull <root> <path>" |
+ * "fs-push <root> <dir> <localfile>" | "fs-delete <root> <path>" |
+ * "fs-rename <root> <path> <newName>" | "media". `scripts/m9-test.sh` drives these.
  */
 private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
     val file = File(File(System.getProperty("user.home"), ".clipsync"), "mirror-cmd.txt")
