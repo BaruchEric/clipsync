@@ -101,18 +101,18 @@ works as a headless fallback. `scripts/pairing-test.sh` drives and asserts the w
 
 ## Status
 
-Everything is verified on real hardware (tags m1–m7): scaffold + macOS watcher, Android
+Everything is verified on real hardware (tags m1–m7, m9): scaffold + macOS watcher, Android
 background capture via Shizuku, crypto + QR/SAS pairing, LAN sync with mDNS discovery,
 tailnet hardening (a photo copied on LTE reaches the Mac in ~3 s over Tailscale), file
 transfer both directions, offline-copy replay on reconnect, notification mirroring with
 desktop reply, and status-first UI on both apps. Messages (M8) is built with its read path
-verified on-device; the live radio send is the last hand-verification. Phone file & photo
-browse (M9) is built and gate-verified (122 shared tests; both the Android APK and the
-desktop app build clean) but **not yet hardware-verified** — nothing in its Android half or
-its desktop Files tab has run on a real device yet, so `m9` stays untagged until that session.
-`scripts/m9-test.sh` drives and asserts that session end to end
-(`preflight | selftest | run | ui | verify | evidence | logs | stop | clean`); it deliberately
-leaves the two consent taps — the browse card and the photo permission — to you.
+verified on-device; the live radio send is the last hand-verification, and `m8` stays
+untagged until it happens. Phone file & photo browse (M9) is **verified on-device**
+(2026-08-14): `scripts/m9-test.sh run` passed 29/0 on the SM-S921U — roots, listings,
+pull/push sha256-identical both directions, trash-first delete, rename, the consent gate,
+and the photo grid — plus all four Files-tab `ui` states. The session caught one real bug
+(MediaStore paging via a `LIMIT` sortOrder suffix, rejected on Android 11+), fixed and
+re-verified in-session; three UI findings are recorded for M9.1 in `HANDOFF.md`.
 The parity roadmap (vs. LinkMyMac/LinkMyDroid) is in
 `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 
