@@ -79,7 +79,12 @@ Known limitations, not fixed in this milestone:
   next bind. `bindUserService` does not reuse a helper whose client process died, and
   `daemon(false)` can't save it (a killed process never runs an unbind), so `bind()` now unbinds
   with `remove = true` on the way in, and consent-off tears the helper down. **Not yet verified
-  on hardware** — the phone left mid-session; reproduction steps are in RELEASE-NOTES 0.4.2.
+  on hardware** — the phone left mid-session; reproduction steps are in RELEASE-NOTES 0.4.2, and
+  they cover *two* things: the process count, and an off→on consent toggle round-trip (the
+  riskier half — its failure mode is browsing silently dead, not a leaked process). The
+  cross-process reap mechanism itself is confirmed from the Shizuku 13.1.5 bytecode (remove
+  sends a null connection and keys on ComponentName), so what's open is device behavior, not
+  whether the API can do this at all.
   The self-death re-bind case above is still open: nothing detects a bridge that dies while
   Shizuku stays up, so browsing is still dead until relaunch (a health-check ping before each
   request, or a binder death recipient, would close it).

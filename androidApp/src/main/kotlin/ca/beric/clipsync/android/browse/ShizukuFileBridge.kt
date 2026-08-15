@@ -53,8 +53,19 @@ class ShizukuFileBridge(context: Context) : FileBridge {
      * 2 → 3 → 4 across two force-stop/start cycles, unbounded, each orphan a privileged process
      * with whole-filesystem reach and no client. `.daemon(false)` cannot prevent it: a killed
      * process never gets to run an unbind. The reap therefore has to happen on the way *in*,
-     * from the new process, keyed on the same [args] — Shizuku identifies a user service by its
-     * component, process suffix and version, not by the connection object that bound it.
+     * from the new process.
+     *
+     * That this works cross-process is not an assumption — it is what the API actually does
+     * (verified against the `dev.rikka.shizuku:api:13.1.5` bytecode, since it decides whether
+     * this fix is real or inert). With `remove = true`, `unbindUserService` calls
+     * `IShizukuService.removeUserService(null, args.forRemove(true))`: the connection it sends
+     * is literally **null**, and the Bundle carries only the component, the tag, and the remove
+     * flag. So the server identifies the doomed service by **ComponentName**, which is stable
+     * across processes — not by the [ServiceConnection] instance, which is per-process and
+     * would make a new process unable to reap an old one. (The client-side connection cache is
+     * keyed the same way, `tag ?: componentName.className`.) Note the remove Bundle carries no
+     * version code, so this reaps whatever instance exists for the component, which is what a
+     * leak-sweep wants.
      *
      * Both calls are wrapped: with no previous instance the unbind is a no-op, and its failure
      * must never stop the bind that follows.

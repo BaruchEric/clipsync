@@ -35,11 +35,21 @@
 
 ### Known
 
-- **The file-bridge leak fix is unverified on hardware.** To check it: `adb shell ps -A | grep
-  filebridge`, then `am force-stop ca.beric.clipsync` and `am start` a couple of times. Before
-  the fix the count grew by one per start and old processes survived the force-stop; after it
-  the count should stay at one. Orphans from *earlier* builds are only cleared by a reboot
-  (Shizuku stops then anyway).
+- **The file-bridge changes are unverified on hardware.** Two things to check, not one:
+  1. *The leak.* `adb shell ps -A | grep filebridge`, then `am force-stop ca.beric.clipsync` and
+     `am start` a couple of times. Before the fix the count grew by one per start and old
+     processes survived the force-stop; after it, it should stay at one. Orphans from *earlier*
+     builds are only cleared by a reboot (Shizuku stops then anyway).
+  2. *The consent toggle round-trip*, which is the riskier half. Turn the browse card **off**
+     (the helper should stop), then **on** again, and browse a folder from the desktop. The
+     failure mode to watch for is browsing silently dead after an off→on cycle rather than a
+     leaked process — a user-visible regression on the same consent path M9.1 already found a
+     `StateFlow` bug on.
+
+  The cross-process mechanism itself *is* confirmed, from the `dev.rikka.shizuku:api:13.1.5`
+  bytecode rather than by assumption: with `remove = true` the client sends a null connection
+  and a Bundle of component + tag, so the server reaps by ComponentName, which is stable across
+  processes. What remains unverified is the behavior on a real device, not the API contract.
 - Everything else in the deferred ledger is untouched and still open — see `DEFERRED-QUESTIONS.md`.
 
 ---

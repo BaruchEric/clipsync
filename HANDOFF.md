@@ -98,9 +98,21 @@ inside `if (next)` in `MainActivity`, so the else could never run. The call move
    this project mean "verified on real hardware" — 0.4.2's Android half isn't, so applying one
    unattended would devalue what m1–m9 mean. Branch `m10-deferred-ledger` is ready to merge when
    you've seen it.
-2. **Verify the leak fix on the phone** (the one thing this session couldn't finish): install
-   0.4.2, then `adb shell ps -A | grep filebridge` around a couple of `am force-stop` /
-   `am start` cycles. The count should stay at one instead of climbing.
+2. **Verify the two file-bridge changes on the phone** (what this session couldn't finish).
+   Install 0.4.2, then:
+   - *Leak:* `adb shell ps -A | grep filebridge` around a couple of `am force-stop` / `am start`
+     cycles. The count should stay at one instead of climbing.
+   - *Consent toggle round-trip* — the riskier one, and easy to skip: turn the browse card off,
+     then on, then browse a folder. Watch for browsing being silently dead after off→on, not
+     just for the process count. This is a user-visible path, on the same consent flow M9.1
+     already found a bug on.
+
+   The cross-process mechanism is confirmed from the Shizuku 13.1.5 bytecode, not assumed:
+   `unbindUserService(..., remove = true)` sends a **null** connection plus a component+tag
+   Bundle, so the server reaps by ComponentName — stable across processes, which is exactly
+   what makes a new process able to clean up an old one's orphan. (Had it keyed on the
+   `ServiceConnection` instance, this fix would have been inert and the docs would have said
+   "fixed" over a no-op.) The API contract is settled; the device behavior is not.
 3. Your phone may still carry ~4 orphaned filebridge processes from the experiment above. They
    are harmless and a reboot clears them (Shizuku stops on reboot regardless).
 
