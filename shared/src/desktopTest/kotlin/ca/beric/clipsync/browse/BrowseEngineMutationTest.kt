@@ -43,6 +43,26 @@ class BrowseEngineMutationTest {
         )
     }
 
+    /**
+     * A root TWO levels below another: `internal` contains `DCIM`, which contains the declared
+     * `camera` root. The real seven never nest this deeply today — this is the shape that an
+     * equality-only [BrowseEngine.isDeclaredRootPath] would silently mis-handle (M9 residual R3).
+     */
+    private fun deeplyNestedEngine(scope: CoroutineScope): BrowseEngine {
+        root = Files.createTempDirectory("clipsync-mutate-deep").toFile()
+        File(root, "DCIM/Camera").mkdirs()
+        return BrowseEngine(
+            scope = scope,
+            bridge = JvmFileBridge(),
+            roots = listOf(
+                BrowseRoot("internal", "Internal", root.absolutePath),
+                BrowseRoot("camera", "Camera", File(root, "DCIM/Camera").absolutePath),
+            ),
+            enabled = { true },
+            clock = { 1_700_000_000_000L },
+        )
+    }
+
     @Test
     fun deleteMovesToTrashRatherThanUnlinking() = runBlocking {
         val e = engine(this)
@@ -156,6 +176,57 @@ class BrowseEngineMutationTest {
         assertFalse(reply.ok)
         assertEquals("path rejected", reply.detail)
         assertTrue(File(root, "DCIM").exists(), "the child root's directory must survive")
+    }
+
+    @Test
+    fun refusesAncestorOfNestedRoot() = runBlocking {
+        // R3, the hole equality left open: `DCIM` is not itself a declared root, so an
+        // equality-only check waves it through — and trashing it swallows the `camera` root
+        // nested inside, which then renders as a permanently empty folder rather than an error.
+        // Delete and rename both have to refuse an ancestor, not just an exact mount point.
+        val e = deeplyNestedEngine(this)
+        val cameraRoot = File(root, "DCIM/Camera")
+        File(cameraRoot, "IMG_0001.jpg").writeText("photo")
+
+        val deleted = e.onEvent("peer", MirrorEvent.FsDelete("internal", listOf("DCIM"))) as MirrorEvent.FsResult
+        assertFalse(deleted.ok, "deleting an ancestor of a declared root must be refused")
+        assertEquals("path rejected", deleted.detail)
+
+        val renamed = e.onEvent("peer", MirrorEvent.FsRename("internal", "DCIM", "DCIM2")) as MirrorEvent.FsResult
+        assertFalse(renamed.ok, "renaming an ancestor of a declared root must be refused")
+        assertEquals("path rejected", renamed.detail)
+
+        assertTrue(cameraRoot.exists(), "the nested root's directory must survive")
+        assertEquals("photo", File(cameraRoot, "IMG_0001.jpg").readText())
+    }
+
+    @Test
+    fun nestingFixChangesNothingForTodaysRoots() = runBlocking {
+        // The other half of R3: widening a refusal in the security core is only safe if it is
+        // behavior-preserving for the roots that actually ship. A path is newly refused only
+        // when it is a STRICT ancestor of some root, and with the real one-level shape (six
+        // direct children of `internal`) the only such path is `internal` itself — which
+        // equality already refused. So every ordinary operation must still behave exactly as
+        // it did before the change.
+        val e = nestedEngine(this)
+        File(root, "Notes/sub").mkdirs()
+        File(root, "Notes/sub/todo.txt").writeText("buy milk")
+
+        // An ordinary subdirectory sitting beside a nested root still deletes.
+        val ok = e.onEvent("peer", MirrorEvent.FsDelete("internal", listOf("Notes"))) as MirrorEvent.FsResult
+        assertTrue(ok.ok, ok.detail)
+        assertFalse(File(root, "Notes").exists())
+
+        // The parent root's own directory stays refused (it was, by equality, before the fix).
+        val parent = e.onEvent("peer", MirrorEvent.FsDelete("internal", listOf(""))) as MirrorEvent.FsResult
+        assertFalse(parent.ok)
+
+        // And a file *inside* the nested root is still deletable through that root — the fix
+        // refuses ancestors, never descendants.
+        File(root, "DCIM/IMG_0002.jpg").writeText("photo")
+        val inner = e.onEvent("peer", MirrorEvent.FsDelete("camera", listOf("IMG_0002.jpg"))) as MirrorEvent.FsResult
+        assertTrue(inner.ok, inner.detail)
+        assertFalse(File(root, "DCIM/IMG_0002.jpg").exists())
     }
 
     @Test

@@ -91,17 +91,25 @@ class BrowseEngine(
      * `camera` root's own directory. Checking only the requested root's path leaves every
      * nested root reachable, and swallowable, through its parent.
      *
-     * EQUALITY, NOT PREFIX — and that encodes an unwritten constraint on [roots]: **no root may
-     * sit more than one level below another.** Today every declared root is a direct child of
-     * `internal`, so refusing the exact mount points is sufficient: nothing can name a directory
-     * that merely *contains* a root without naming a root itself. Add a root nested two levels
-     * down (say `internal/DCIM/Camera`) and that stops being true — deleting `DCIM` would then
-     * swallow it, silently reopening the hole this method exists to close. The one-clause fix if
-     * that day comes is `rc == abs || rc.startsWith("$abs/")`; it is deliberately not applied now
-     * because it would widen refusals in the milestone's security core before that core has run
-     * on a device even once (M9 review residual R3).
+     * ANCESTORS COUNT TOO. [abs] is refused when it *is* a root and when it merely *contains*
+     * one. Equality alone would have encoded an unwritten constraint on [roots] — that no root
+     * may sit more than one level below another — which holds for today's seven (six direct
+     * children of `internal`) and would silently stop holding the day someone adds, say,
+     * `internal/DCIM/Camera`: deleting `DCIM` would swallow a declared root that equality never
+     * looks at. The prefix clause removes the constraint instead of documenting it (M9 review
+     * residual R3, deferred out of M9 so the security core could run on a device first — it has,
+     * 29/0 in the M9 session and clean again in M9.1).
+     *
+     * Behavior-preserving for the current root set: a path is newly refused only if it is a
+     * *strict* ancestor of some root, and the only such path reachable through [resolve] is
+     * `internal` itself, which equality already refused. Proven by
+     * `refusesAncestorOfNestedRoot` / `nestingFixChangesNothingForTodaysRoots` in
+     * `BrowseEngineTest`.
      */
-    private fun isDeclaredRootPath(abs: String): Boolean = roots.any { bridge.canonical(it.path) == abs }
+    private fun isDeclaredRootPath(abs: String): Boolean = roots.any {
+        val rc = bridge.canonical(it.path) ?: return@any false
+        rc == abs || rc.startsWith("$abs/")
+    }
 
     private fun onList(q: MirrorEvent.FsQueryList): MirrorEvent {
         val abs = resolve(q.root, q.path) ?: return MirrorEvent.FsResult("list", false, "path rejected")
