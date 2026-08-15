@@ -30,10 +30,10 @@ experience*, not cloning the app.
 | Android⇄Android | ✅ architecture already symmetric P2P | free differentiator — reference "not yet" |
 | Works off-LAN | ✅ tailnet direct-dial | ahead (reference is LAN-only) |
 | Notification mirroring + reply | ✅ | **M7 built + verified 2026-08-12** (mirror + RemoteInput reply, E2E-sealed `mirror` envelope) |
-| SMS/Messages from desktop | ✅ | **M8 built 2026-08-12** (threads/read/send from desktop; read path verified on-device; live send = one user tap) |
+| SMS/Messages from desktop | ✅ | **M8 fully verified 2026-08-15, tagged `m8`** — live radio send from the desktop, Verizon loopback landed as an inbox row, new-text observer pushed unprompted (built 2026-08-12; read path verified on-device then) |
 | Screen mirror + remote control | ❌ | Out for now: **scrcpy** already does this best (FOSS); remote *input* is feasible via Shizuku (`input` through SHELL uid) if ever wanted |
 | Webcam | ❌ | Out: whole product on its own (video pipeline + virtual camera driver on macOS) |
-| Photos / contacts / file-manager browse | 🟡 files + photos (M9; on-device pending) | **M9 built 2026-08-13** — full browse/pull/push/rename/trash-delete via the Shizuku bridge (no new storage permission for files); the photo grid needs `READ_MEDIA_IMAGES` only. Gate-verified, not yet hardware-verified. Contacts stay out: reading them would need `READ_CONTACTS`, which clipsync has never requested (same restraint as Messages/M8) |
+| Photos / contacts / file-manager browse | ✅ files + photos | **M9 verified on-device 2026-08-14, tagged `m9`** (29/0 driven run), **M9.1 polish verified 2026-08-15** (truncation flag, offline/reconnect state, refusal-over-stale, scrollable chips, two-phone picker) — full browse/pull/push/rename/trash-delete via the Shizuku bridge (no new storage permission for files); the photo grid needs `READ_MEDIA_IMAGES` only. Contacts stay out: reading them would need `READ_CONTACTS`, which clipsync has never requested (same restraint as Messages/M8) |
 
 ## Priority call (made autonomously — veto welcome)
 
