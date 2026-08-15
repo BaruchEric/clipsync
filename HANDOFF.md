@@ -1,9 +1,8 @@
-# clipsync — Build Handoff (2026-08-13)
+# clipsync — Build Handoff (2026-08-14)
 
-State after Phase 0 → M9. Everything below is verified on real hardware (Mac ↔ SM-S921U)
-**except M9 phone browse**, which is built and gate-verified only — its on-device session is
-still pending (see its row and session section below). Sessions are logged newest-first below
-the table.
+State after Phase 0 → M9. Everything below is verified on real hardware (Mac ↔ SM-S921U),
+M9 included as of 2026-08-14 (see its session section below). Sessions are logged
+newest-first below the table.
 
 ## Done & verified
 
@@ -20,7 +19,7 @@ the table.
 | GUI status pass | ✅ | status-first screens both apps, verified by on-device screenshots |
 | M7 notification mirroring + reply | ✅ tag `m7` | phone notification → Mac ~2 s; desktop reply landed back through RemoteInput (ok=true, len asserted) |
 | M8 messages | 🟢 read path verified; tag `m8` after Eric's one live send | 30 threads / 15-message fetch ~2 s each; observer on the right URIs; radio send + new-text push ride Eric's first real text |
-| M9 phone browse | 🟡 built, gate-verified only; on-device run pending | 122/0/1 shared suite, `:androidApp:assembleDebug` + `:desktopApp:createDistributable` both green; zero on-device execution of the Android half (Shizuku user service, MediaStore) or the desktop Files tab — see the M9 session below |
+| M9 phone browse | 🟢 verified on-device 2026-08-14; tag `m9` after commit | `m9-test.sh run` 29/0 in a single pass (roots, list, pull/push sha256, trash-first delete, rename, consent-gate refusal, 20 media items) + all four Files-tab `ui` states; one real bug (MediaStore paging) found on-device and fixed; 3 UI findings recorded — see the session below |
 
 **122 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.0/vc5); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
@@ -31,6 +30,46 @@ propagates — without it `:androidApp` dies at dependency resolution with "SDK 
 ```
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
+
+## M9 on-device session (2026-08-14) — VERIFIED, 29/0
+
+The pending session from the M9 row ran on the real S24 (0.4.0/vc5; Shizuku restarted over
+adb by exec'ing `libshizuku.so`, the trick recorded in the M8 session). `m9-test.sh run`:
+**29 passed, 0 failed** in one pass — 7 roots by id, listings, pull and push sha256-identical
+both directions, trash-first delete with bytes intact, in-place rename, and the consent gate:
+card OFF refused with the exact Files-tab reason ('browsing disabled') and nothing leaked;
+card back ON, media answered 20 items. `ui` then walked all four Files-tab states. Evidence:
+`build/m9-test/` (gitignored) — results.txt, desktop.log, logcat.log, ui-8/9/10/11 pngs.
+
+**One real app bug, findable only on-device, fixed and re-verified in-session:**
+`MediaIndex` paged with `LIMIT`/`OFFSET` inside the sortOrder string. MediaProvider on R+
+parses sortOrder strictly and rejects it ("Invalid token LIMIT"), and the `runCatching`
+swallowed that into an empty list — "0 items", indistinguishable from an empty gallery.
+Paging now goes through the Bundle query args on R+ (the string suffix stays for Q, where
+the args don't exist). Verified after: 20 items, thumbnails rendering past the 24th tile,
+so the backfill loop is live too.
+
+Two harness bugs, found by the first pass rather than by reading:
+- The trash assertion looked for the bare filename; `BrowseEngine` stamps trash entries
+  `yyyyMMdd-HHmmss-<name>` on purpose (collision-proof). The engine was right.
+- Scratch setup wasn't idempotent: run 1's `b.txt` made run 2's rename collide — which
+  incidentally exercised the 'name already taken' refusal on a device. Setup now wipes first.
+
+Three UI findings, **recorded rather than fixed** (the same order-of-work argument as R3):
+- **The root-chip row neither wraps nor scrolls.** At the default window width 7 chips
+  overflow: 'Movies' renders letter-by-letter vertically, and 'Music' plus the Photos
+  button are pushed out of view — the photo grid is unreachable until the window is widened.
+- **Disconnect leaves stale roots and an indefinite 'Loading…'.** The no-roots message only
+  renders when `roots` is empty, and a disconnect doesn't clear the cached chips (R10's
+  family: the tab has no offline/retry state of its own).
+- **A refusal that arrives while stale data is on screen is invisible.** With photos already
+  listed, revoking the permission produced the correct `fs media ok=false photo permission
+  not granted` (logged, plumbing verified end-to-end) — but the grid kept the stale 20 names
+  with silently blank thumbs. The message only shows on an empty grid; a fresh desktop
+  showed it verbatim.
+
+Also verified live: the stale-listing guard — x→back→y driven in ~300 ms (cliclick), the
+settled listing matched the breadcrumb — and the delete dialog's exact trash-first wording.
 
 ## M9.1 prep (2026-08-14) — the on-device session is now one command
 

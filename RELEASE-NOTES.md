@@ -1,12 +1,13 @@
 # Release notes
 
-## 0.4.0 (versionCode 5) — Phone file & photo browse — **DRAFT, NOT YET RELEASED**
+## 0.4.0 (versionCode 5) — Phone file & photo browse
 
-> **Status: not shipped.** The `m9` tag is deliberately withheld until the on-device session
-> runs. Every other tag in this project (`m1`–`m7`) means "verified on real hardware", and
-> nothing in this release's Android half or its desktop Files tab has executed on a device yet.
-> Drive that session with `scripts/m9-test.sh` (`preflight` → `run` → `ui`). These notes are
-> written now so the constraints below are not rediscovered during it.
+> **Status: verified on real hardware 2026-08-14.** The on-device session ran clean —
+> `scripts/m9-test.sh run` 29/0 on the SM-S921U plus all four Files-tab `ui` states (record
+> in HANDOFF.md). It caught one real bug, fixed in-session: MediaStore paging used a
+> `LIMIT` suffix in the sortOrder, which Android 11+ rejects and the app read as an empty
+> gallery; paging now uses the Bundle query args. The `m9` tag goes on the commit that
+> carries that fix.
 
 ### New: browse your phone's files and photos from the Mac
 
