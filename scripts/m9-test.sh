@@ -365,6 +365,9 @@ cmd_run() {
   wait_for_peer
 
   head1 "Scratch"
+  # Recreate from nothing so a re-run is idempotent: a prior run's b.txt makes the rename
+  # step collide ('name already taken' — the engine refusing that is by design).
+  a shell rm -rf "$SCRATCH_ABS" >/dev/null 2>&1 || true
   a shell mkdir -p "$SCRATCH_ABS" >/dev/null 2>&1 || true
   # A known-content source file for the pull, made on the phone so the pull is the only
   # thing that moves it across.
@@ -433,9 +436,15 @@ cmd_run() {
   head1 "5. Delete (trash-first)"
   step "delete" "fs-delete download $SCRATCH_REL/push-me.bin" 'clipsync: fs delete ok=true' 15 || true
   if [[ -z "$(phone_sha "$SCRATCH_ABS/push-me.bin")" ]]; then ok "gone from $SCRATCH_ABS"; else bad "still present at $SCRATCH_ABS/push-me.bin after delete"; fi
-  local trashed; trashed="$(phone_sha "$TRASH_ABS/push-me.bin")"
+  # BrowseEngine stamps every trash entry yyyyMMdd-HHmmss-<name> (collision-proof, see
+  # BrowseEngine.onDelete), so look for the newest stamped entry, not the bare name.
+  local trashname
+  trashname="$(a shell ls -t "$TRASH_ABS" 2>/dev/null | tr -d '\r' |
+    grep -E -- '^[0-9]{8}-[0-9]{6}-push-me\.bin$' | head -1 || true)"
+  local trashed=""
+  [[ -n "$trashname" ]] && trashed="$(phone_sha "$TRASH_ABS/$trashname")"
   if [[ "$trashed" == "$push_sha" ]]; then
-    ok "moved to $TRASH_ABS, bytes intact — trash-first, not erased"
+    ok "moved to $TRASH_ABS/$trashname, bytes intact — trash-first, not erased"
   elif [[ -n "$trashed" ]]; then
     bad "in the trash but the bytes changed (${trashed:0:12}… vs ${push_sha:0:12}…)"
   else
