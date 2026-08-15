@@ -84,7 +84,11 @@ mac_ip()       { ipconfig getifaddr "$(route -n get default 2>/dev/null | awk '/
 # `|| true`: with pipefail an offline transport makes adb's status the pipeline's,
 # which would abort the caller's assignment under set -e with no message at all.
 phone_ip()     { a shell ip -4 addr show wlan0 2>/dev/null | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}' || true; }
-desktop_pid()  { pgrep -f 'clipsync.app/Contents/MacOS/clipsync' 2>/dev/null | head -1; }
+# Same `|| true`, same reason, one rung further: pgrep exits 1 when nothing matches, and
+# pipefail promotes that to the pipeline's status — so `live="$(desktop_pid)"` aborted the
+# caller under set -e in the ordinary case of no desktop running, printing nothing. Carried
+# over from the m9-test.sh fix wave, where this exact construct was found and fixed.
+desktop_pid()  { pgrep -f 'clipsync.app/Contents/MacOS/clipsync' 2>/dev/null | head -1 || true; }
 # Single-quoted SQL literals: double quotes are identifiers in SQLite and only work
 # here by way of a legacy fallback. One query, not a count followed by a select.
 peer_count()   { sqlite3 "$1" 'select count(*) from peer' 2>/dev/null || echo 0; }
