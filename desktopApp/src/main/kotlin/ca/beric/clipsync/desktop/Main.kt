@@ -1049,7 +1049,19 @@ private fun watchMirrorCmd(scope: CoroutineScope, boot: Boot) {
                     println("clipsync: mirror-cmd unrecognized: $line")
                     continue
                 }
-                println("clipsync: mirror-cmd ${parts[0]} sent=${boot.mirror.send(null, event)}")
+                // Browse verbs address ONE peer, for exactly the reason FilesScreen does — and
+                // uniformly, not just the destructive ones: a listing from one phone paired
+                // with a delete addressed to another is worse than broadcasting both. `fs-push`
+                // already targeted (it must, to use the destination that peer resolved); review
+                // residual R1 left the rest of the harness broadcasting while the Files tab was
+                // fixed, and the harness is the likeliest way an on-device session drives this.
+                val browse = parts[0].startsWith("fs-") || parts[0] == "media"
+                val target = if (browse) boot.connectedPeers.value.firstOrNull() else null
+                if (browse && target == null) {
+                    println("clipsync: mirror-cmd ${parts[0]}: no connected peer")
+                    continue
+                }
+                println("clipsync: mirror-cmd ${parts[0]} sent=${boot.mirror.send(target, event)}")
             }
         }
     }
