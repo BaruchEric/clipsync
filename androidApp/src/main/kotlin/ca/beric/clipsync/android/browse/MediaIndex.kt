@@ -1,10 +1,12 @@
 package ca.beric.clipsync.android.browse
 
 import android.Manifest
+import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
@@ -39,9 +41,24 @@ class MediaIndex(context: Context) {
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
         )
-        val order = "${MediaStore.Images.Media.DATE_MODIFIED} DESC LIMIT ${limit.coerceIn(1, 200)} OFFSET ${offset.coerceAtLeast(0)}"
+        // MediaProvider on R+ parses sortOrder strictly and rejects a LIMIT/OFFSET suffix
+        // ("Invalid token LIMIT" — found on-device, Android 16). Paging goes through the
+        // Bundle query args there; the string suffix stays only for Q, where the args are
+        // ignored and the suffix still parses.
         runCatching {
-            resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, null, null, order)?.use { c ->
+            val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val args = Bundle().apply {
+                    putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.Images.Media.DATE_MODIFIED))
+                    putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+                    putInt(ContentResolver.QUERY_ARG_LIMIT, limit.coerceIn(1, 200))
+                    putInt(ContentResolver.QUERY_ARG_OFFSET, offset.coerceAtLeast(0))
+                }
+                resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, args, null)
+            } else {
+                val order = "${MediaStore.Images.Media.DATE_MODIFIED} DESC LIMIT ${limit.coerceIn(1, 200)} OFFSET ${offset.coerceAtLeast(0)}"
+                resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, null, null, order)
+            }
+            cursor?.use { c ->
                 while (c.moveToNext()) {
                     out += MediaItem(
                         id = c.getLong(0),
