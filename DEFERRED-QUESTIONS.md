@@ -5,12 +5,15 @@ Decisions I made without you are logged here with my reasoning, so you can veto 
 
 ## Open questions (need your input eventually)
 
-- **M2 real-hardware confirmation — nearly closed (2026-08-12 16:12).** Shizuku granted; the phone's first Shizuku clipboard read captured and synced to the Mac, and a Mac copy landed on the phone (both DBs agree, correct attribution). Last sliver: a copy from another app while clipsync is **backgrounded** / after Doze — normal daily use settles it. Restart Shizuku after each reboot (HANDOFF has the adb one-liner).
+- ~~M2 real-hardware confirmation~~ — **CLOSED by daily use (2026-08-12 19:20).** The GUI-pass session's organic Activity feed showed your real copies syncing live while clipsync was backgrounded — the exact "last sliver" this row was waiting on. (Standing note: restart Shizuku after each reboot; HANDOFF has the adb one-liner.)
 - ~~M4 real-Wi-Fi confirmation~~ — **DONE 2026-08-12**: mDNS verified on real Wi-Fi after fixing a JmDNS loopback-bind bug (the Mac advertised 127.0.0.1 because `InetAddress.getLocalHost()` resolves to loopback on stock macOS; now bound to the first real LAN IPv4). Evidence: Mac log "mDNS discovered <S24> at 192.168.1.45:47653; dialing"; dns-sd shows both adverts with real SRV targets. A stale pre-fix loopback record may linger in Android's mDNS cache until TTL — harmless, three other connect paths cover it.
 - ~~M6 real-hardware confirmation~~ — **DONE 2026-08-12**: verified Mac↔SM-S921U both directions on the real LAN, sha256-identical, including the cold-start share path. See HANDOFF "M6 real-S24 run". Tags m3/m4/m6 pushed.
 - ~~m5 LTE gate~~ — **MET 2026-08-12 17:31, tagged.** Phone on LTE + Tailscale → Gallery photo on the Mac pasteboard in ~3 s (gate: <5 s); endpoint refresh carried the network switch; Mac→phone exercised by the link-up replay. ~~Only mechanical step left: install the current APK on the S24 at next Wi-Fi/USB contact.~~ **Delivered 2026-08-12 18:20 — by clipsync itself** (wireless debugging turned itself off on the network switch, so no adb): `Download/clipsync/clipsync-0.2.1.apk`, 55 MB in ~15 s. Left for you, deliberately, because it's a consent dialog: **tap the APK → Update → open clipsync once** (Shizuku grant survives the update). Then delete the APKs in that folder. If you'd rather I do it end-to-end: toggle Wireless debugging on and say so.
 - ~~M7/M8 scope sign-off~~ — **signed off ("go with both") and built 2026-08-12.** M7 verified end-to-end (mirror + reply); M8 read path verified, live radio send left as your one tap (Messages tab → text yourself), observer push proves itself on the first real text. Note: I granted the phone-side access via adb under that sign-off — notification listener (`cmd notification allow_listener ca.beric.clipsync/…NotifMirrorService`) and SMS (`pm grant … READ_SMS/SEND_SMS`); revoke anytime with `disallow_listener` / `pm revoke`, or the app's cards re-request interactively.
-- **M9 real-hardware confirmation — not started.** Phone file & photo browse is built and
+- ~~M9 real-hardware confirmation~~ — **DONE 2026-08-14** (`m9-test.sh run` 29/0 on the S24,
+  `m9` tagged), and the M9.1 follow-up batch (0.4.1) verified on-device 2026-08-15 — see
+  HANDOFF's session records. Original row kept for the links:
+  Phone file & photo browse is built and
   gate-verified only (2026-08-13); your S24 was unreachable this session (no adb device, no
   `_adb-tls-connect` advert, Tailscale node offline). Needs: unlock the phone, start Shizuku,
   turn on "Let a paired Mac browse my files" and grant the photo permission when asked, then
@@ -62,18 +65,17 @@ Known limitations, not fixed in this milestone:
   `op`/`ok`/`detail`, nothing to correlate a reply against the request that produced it. Needs
   a protocol change (tag `FsResult` with the root/path or a request id). Produces a wrong
   message, not data loss; needs fast navigation to trigger.
-- The desktop broadcasts browse requests to every connected peer rather than targeting one — a
-  second paired phone would answer the same request. Not reachable with your current
-  one-phone setup.
+- ~~The desktop broadcasts browse requests to every connected peer rather than targeting one~~ —
+  **FIXED in two stages**: the M9 review's R1 made the Files tab and every harness browse verb
+  address one peer, and M9.1 (0.4.1) added the explicit picker for ≥2 connected phones.
+  Seeing the picker live still needs a second paired phone.
 - Nothing re-binds the Shizuku file service if `FileBridgeService` dies on its own while
   Shizuku itself keeps running (it's a killable, non-daemon process) — browsing stays dead
   until the clipsync app is relaunched. Distinct from the Shizuku-*restarts* case, which Task 9
   already covers (`Shizuku.addBinderReceivedListener`).
-- Carried from M6, found during M9's review, not an M9 regression: `FileTransferEngine`'s
-  transfer-state list is a plain `MutableStateFlow` read-modify-write with no `.update{}` — two
-  concurrent transfers on different threads can silently drop a state update, which can make
-  transfer rows look frozen in both UIs. One-line fix (`_transfers.update { ... }`); parked for
-  the branch's final review rather than opened in this task.
+- ~~Carried from M6: `FileTransferEngine`'s transfer-state read-modify-write~~ — **FIXED in
+  the 0.4.0 final review wave** (`_transfers.update { … }` at FileTransferEngine.kt:360, plus
+  the same shape on incoming thumbnail batches; release-noted in 0.4.0 "Also in this release").
 
 ## M4 live sync — DONE (2026-08-08)
 
@@ -93,7 +95,7 @@ Built and (where possible) verified on the emulator:
 
 ### New open items / decisions to know
 
-- **CI is unverified until first push.** GitHub Actions can't run locally; the workflow is correct-by-construction and the test suite passes in a simulated `CI=true` run, but the macOS/Ubuntu runners haven't executed it. Watch the first run.
+- ~~CI is unverified until first push~~ — **VERIFIED: green on every push** (checked 2026-08-15: the last four runs on main all completed successfully, ~2 min each, after the actions/setup-java v5 bump).
 - **mDNS: fully verified on real Wi-Fi (2026-08-12).** Both halves live: the Mac discovers and dials the phone's NsdManager advert at its real address, and the phone browses the Mac's JmDNS advert. Required fixing JmDNS to bind a real LAN interface instead of `InetAddress.getLocalHost()` (loopback on macOS — the loopback-only bind is also why the desktop half "worked" in the local opt-in test but was invisible on a real LAN).
 - **Per-peer link dedup is implemented but not exercised.** The manager closes a duplicate link when a peer is already connected. On the emulator only one side can reach the other (Mac can't dial the emulator), so the dedup path never ran there — it's implemented, not verified. Related: connection "glare" (both sides' links completing near-simultaneously and both dropping) is possible; the backoff dialer reconnects within ~2s. Rare on a LAN; a deterministic tiebreaker (keep the lower-id dialer's link) is the fix if it ever bites.
 - **TLS server does no client-auth.** A dialing peer presents no certificate; peer identity rests entirely on the `Hello` device id + the per-pair key (a wrong key fails the AEAD open). This is fine for an E2E-encrypted app but is the kind of thing a security review will flag — documented deliberately.
