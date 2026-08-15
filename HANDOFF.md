@@ -1,4 +1,4 @@
-# clipsync — Build Handoff (2026-08-14)
+# clipsync — Build Handoff (2026-08-15)
 
 State after Phase 0 → M9. Everything below is verified on real hardware (Mac ↔ SM-S921U),
 M9 included as of 2026-08-14 (see its session section below). Sessions are logged
@@ -18,7 +18,7 @@ newest-first below the table.
 | Replay-on-connect | ✅ | offline phone clip → Mac ~2 s after link-up (lock-state-keyed harness) |
 | GUI status pass | ✅ | status-first screens both apps, verified by on-device screenshots |
 | M7 notification mirroring + reply | ✅ tag `m7` | phone notification → Mac ~2 s; desktop reply landed back through RemoteInput (ok=true, len asserted) |
-| M8 messages | 🟢 read path verified; tag `m8` after Eric's one live send | 30 threads / 15-message fetch ~2 s each; observer on the right URIs; radio send + new-text push ride Eric's first real text |
+| M8 messages | ✅ tag `m8` — live send verified 2026-08-15 | radio send ok=true + provider sent row; loopback text (own number, Verizon) came back as an inbox row; observer fired unprompted (2× `sms push sent=true` → 2× unprompted `sms threads: 30` on the desktop); incoming notification mirrored with reply=true — see the session below |
 | M9 phone browse | 🟢 verified on-device 2026-08-14; tag `m9` after commit | `m9-test.sh run` 29/0 in a single pass (roots, list, pull/push sha256, trash-first delete, rename, consent-gate refusal, 20 media items) + all four Files-tab `ui` states; one real bug (MediaStore paging) found on-device and fixed; 3 UI findings recorded — see the session below |
 
 **122 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.0/vc5); `:desktopApp:createDistributable` produces a launchable macOS app image.
@@ -30,6 +30,31 @@ propagates — without it `:androidApp` dies at dependency resolution with "SDK 
 ```
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
+
+## M8 live send (2026-08-15) — VERIFIED, gate met
+
+The one deliberately-human step from the M8 row — a real radio send — ran driven end to end
+(harness `sms-send`, not the tab; same path up to the SmsManager call). Text to Eric's own
+number (+1 818…, discovered via `service call iphonesubinfo`, codes 16/20 on this A16 build):
+
+- **Send**: desktop `mirror-cmd sms-send sent=true` → phone `sms send ok=true len=38` →
+  provider row type=2. Desktop ack `sms send ok=true` came back over the wire.
+- **Real round-trip**: the text left over the Verizon radio and returned — provider row
+  type=1 (inbox), same 38-char body, ~300 ms after the sent row.
+- **The observer proved itself** (the part shell-uid inserts could never exercise —
+  non-default-app write protection silently no-ops them): SmsProvider change notifications
+  on content://mms-sms fired for the sent and the inbox row; phone logged `sms push
+  sent=true` twice; the desktop received two **unprompted** `sms threads: 30` refreshes.
+- **Bonus, M7 exercised organically**: the incoming text's Messages notification mirrored
+  to the desktop as `mirror notif from Messages (38 chars, reply=true)`.
+
+Session facts worth keeping: the phone app was a cached process held alive only by the
+NotifMirrorService binding — the sync service was down and both sides sat discovered-but-
+undialed until `am force-stop` + `am start` (the activity starts fine behind the keyguard;
+SMS send needs no unlock). Link-up was proven first with a read-only `sms-threads` probe
+(30 conversations, ~1 s) before anything was sent. Evidence: `build/m8-live-send/`
+(gitignored) — results.txt, desktop.log. Phone: SM-S921U on 0.4.0/vc5, desktop identity
+614186691d70d0e1.
 
 ## M9 on-device session (2026-08-14) — VERIFIED, 29/0
 
