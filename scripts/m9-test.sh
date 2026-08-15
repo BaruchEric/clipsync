@@ -193,13 +193,16 @@ cmd_preflight() {
       ok "phone unlocked"
     fi
     if a shell pm list packages 2>/dev/null | grep -q "package:$PKG"; then
-      local vn
+      local vn want
       vn="$(a shell dumpsys package "$PKG" 2>/dev/null | awk -F= '/versionName=/{print $2; exit}' | tr -d '\r' || true)"
-      if [[ "$vn" == "0.4.0" ]]; then
-        ok "clipsync $vn installed (M9 build)"
+      # The phone must run the version THIS TREE builds — a pinned "0.4.0" here went stale
+      # the first time the version bumped (0.4.1, M9.1) and failed a correct install.
+      want="$(awk -F'"' '/versionName/{print $2; exit}' "$REPO/androidApp/build.gradle.kts")"
+      if [[ "$vn" == "$want" ]]; then
+        ok "clipsync $vn installed (matches this tree)"
       else
-        bad "clipsync $vn installed, but M9 is 0.4.0 — install androidApp/build/outputs/apk/debug/androidApp-debug.apk"
-        info "the browse card does not exist before 0.4.0, so every step below would refuse"
+        bad "clipsync $vn installed, but this tree builds $want — install androidApp/build/outputs/apk/debug/androidApp-debug.apk"
+        info "the browse card does not exist before 0.4.0, so on an older build every step below would refuse"
       fi
     else
       bad "clipsync not installed on the phone"

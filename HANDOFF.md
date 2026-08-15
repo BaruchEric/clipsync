@@ -20,8 +20,9 @@ newest-first below the table.
 | M7 notification mirroring + reply | ✅ tag `m7` | phone notification → Mac ~2 s; desktop reply landed back through RemoteInput (ok=true, len asserted) |
 | M8 messages | ✅ tag `m8` — live send verified 2026-08-15 | radio send ok=true + provider sent row; loopback text (own number, Verizon) came back as an inbox row; observer fired unprompted (2× `sms push sent=true` → 2× unprompted `sms threads: 30` on the desktop); incoming notification mirrored with reply=true — see the session below |
 | M9 phone browse | 🟢 verified on-device 2026-08-14; tag `m9` after commit | `m9-test.sh run` 29/0 in a single pass (roots, list, pull/push sha256, trash-first delete, rename, consent-gate refusal, 20 media items) + all four Files-tab `ui` states; one real bug (MediaStore paging) found on-device and fixed; 3 UI findings recorded — see the session below |
+| M9.1 Files-tab follow-ups | ✅ verified on-device 2026-08-15 (0.4.1/vc6) | truncation flag live (2005-file folder → "2000 … truncated", 49-entry folder unflagged); offline state, reconnect auto-refetch, refusal-over-stale-grid, thumb recovery, and scrollable chips all screenshot-verified; `m9-test.sh run` re-ran clean (26/26 driven); peer picker built, needs a second phone to see — session below |
 
-**122 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.0/vc5); `:desktopApp:createDistributable` produces a launchable macOS app image.
+**123 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.1/vc6); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
 **Fresh clone / new worktree: write `local.properties` first.** It is gitignored, so it never
 propagates — without it `:androidApp` dies at dependency resolution with "SDK location not found"
@@ -30,6 +31,55 @@ propagates — without it `:androidApp` dies at dependency resolution with "SDK 
 ```
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
+
+## M9.1 session (2026-08-15) — the three findings fixed, VERIFIED on-device
+
+Unattended session (Eric: "continue unattended till all done"). Scope: the M9 session's
+three UI findings, the two 0.4.0 release-note constraints (silent 2000 cap, two-phone
+targeting), and what verification turned up along the way. 0.4.1/vc6.
+
+**Shipped** (details in RELEASE-NOTES 0.4.1): the `fs-entries` `trunc` protocol field with
+its desktop line — *"Showing the first N entries…"*; scrollable root chips with the
+Photos toggle pinned; a real offline state plus reconnect auto-refetch keyed on the peer
+(retires switch-tabs-to-retry); refusal banners over stale grid *and* stale tree;
+`requestedThumbs` reset on media replies so thumbs recover after a permission re-grant;
+a peer picker that renders only with ≥2 phones connected.
+
+**Two bugs only a device could show, both found and fixed in-session:**
+- **The truncation flag was a no-op on Android.** `FileBridgeService.list()` capped at
+  exactly 2000 *before* the Binder hop (transaction-buffer protection), so `BrowseEngine`
+  never saw more rows than the wire cap and `truncated` stayed false — a 2005-file folder
+  listed as an unflagged 2000. The bridge now returns 2001 (one past the wire cap); the
+  engine still forwards 2000. The desktop gates said green the whole time — 123 unit
+  tests can't see a cap that lives on the far side of a Binder call.
+- **Thumbs stayed blank after a permission recovery.** The ask-once memory
+  (`requestedThumbs`) had no reset: ids refused under a revoked `READ_MEDIA_IMAGES` were
+  never re-asked after the re-grant, until the tab was closed and reopened. It now clears
+  on each media reply (bounded: media replies don't generate themselves).
+
+**Verified live** (evidence: `build/m91-test/`, gitignored — desktop.log, win-*.png):
+2005-file scratch → `fs entries … 2000 (0 dirs, 2000 files) truncated`, 49-entry folder
+unflagged; chips scrolled under a pinned Photos at 540 pt (cliclick + Quartz wheel
+events); "No phone connected." replacing stale chips when the phone dropped; reconnect
+auto-refetching roots + open folder + grid with no tab switch; the refusal banner over a
+populated stale grid; thumbs re-loading after re-grant (all 60 drained, so the backfill
+loop got a live pass too). Then `m9-test.sh run` re-ran against both new builds: every
+driven check passed (roots, list, pull/push sha256, trash-first delete, rename, media);
+the consent-OFF step waits for a human by design and was skipped, not faked — that path
+is untouched and was verified in the M9 session.
+
+**Also:** `m9-test.sh` preflight no longer pins the phone to 0.4.0 — it derives the
+expected version from `androidApp/build.gradle.kts` (the pin failed the first correct
+0.4.1 install). Session facts: Shizuku was down again (starts over adb by exec'ing
+`libshizuku.so`, as recorded); `pm revoke` force-stops the app, which played the
+disconnect scenario for free; the S24's keyguard dismissed with a plain swipe this
+session (no PIN gate reached). One oddity, not chased: with the cursor parked over the
+chip row, a burst of synthetic horizontal wheel events ended with the chip under the
+cursor activating — Skiko/Compose event synthesis, not app logic; a real trackpad
+doesn't do it.
+
+**Not device-verifiable here:** the peer picker needs a second paired phone; it's built,
+compiled, and review-argued (falls back on disconnect, renders only at ≥2).
 
 ## M8 live send (2026-08-15) — VERIFIED, gate met
 

@@ -221,12 +221,18 @@ sealed interface MirrorEvent {
         @SerialName("path") val path: String = "",
     ) : MirrorEvent
 
+    /**
+     * [truncated] marks a listing capped at the sender's entry limit — the folder holds more
+     * than [entries] shows. A 0.4.0 sender omits the field; it decodes as false there, which
+     * matches what that sender could express (it never said whether it capped).
+     */
     @Serializable
     @SerialName("fs-entries")
     data class FsEntries(
         @SerialName("root") val root: String,
         @SerialName("path") val path: String,
         @SerialName("list") val entries: List<FsEntry>,
+        @SerialName("trunc") val truncated: Boolean = false,
     ) : MirrorEvent
 
     @Serializable

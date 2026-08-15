@@ -128,6 +128,7 @@ class ProtocolTest {
             MirrorEvent.FsRoots(listOf(FsRoot("dl", "Download"))),
             MirrorEvent.FsQueryList("dl", "sub/dir"),
             MirrorEvent.FsEntries("dl", "sub/dir", listOf(FsEntry("a.txt", 12L, false, 99L, "text/plain"))),
+            MirrorEvent.FsEntries("dl", "big", emptyList(), truncated = true),
             MirrorEvent.MediaQuery(0, 60),
             MirrorEvent.MediaItems(listOf(MediaItem(7L, "IMG.jpg", 900L, 5L, "image/jpeg", 4000, 3000))),
             MirrorEvent.ThumbQuery(listOf(7L, 8L)),
@@ -141,6 +142,14 @@ class ProtocolTest {
         for (event in events) {
             assertEquals(event, MirrorCodec.decode(MirrorCodec.encode(event)), "round trip failed for $event")
         }
+    }
+
+    @Test
+    fun fsEntriesFromAnOldEncoderDecodesAsNotTruncated() {
+        // A 0.4.0 phone emits fs-entries with no "trunc" key at all.
+        val legacy = """{"t":"fs-entries","root":"dl","path":"","list":[]}"""
+        val decoded = MirrorCodec.decode(legacy) as MirrorEvent.FsEntries
+        assertEquals(false, decoded.truncated)
     }
 
     @Test

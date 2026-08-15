@@ -1,5 +1,46 @@
 # Release notes
 
+## 0.4.1 (versionCode 6) — M9.1: the Files tab grows up
+
+> **Status: verified on real hardware 2026-08-15.** Each fix was driven live on the
+> SM-S921U, and the M9 regression harness re-ran clean against these builds (26/26 driven
+> checks; the consent-toggle step waits for a human by design and was verified in the M9
+> session). 123 shared tests, 0 failures, 1 skipped.
+
+Five follow-ups from the M9 on-device session, all shipped:
+
+- **A capped folder now says so.** A folder holding more than 2000 entries used to list
+  exactly 2000 with nothing withheld-looking withheld. The listing now carries a
+  `truncated` flag end to end (`fs-entries` gains a `trunc` field; a 0.4.0 peer omits it
+  and it decodes as false), and the desktop shows *"Showing the first 2000 entries — this
+  folder holds more."* On-device testing caught the bug that would have made the flag a
+  no-op: the phone-side Shizuku bridge capped at exactly 2000 *before* the engine could
+  count, so overfull and exactly-full were indistinguishable — a 2005-file folder listed
+  as an unflagged 2000. The bridge now returns one entry beyond the wire cap.
+- **The root chips scroll; Photos is always reachable.** The chip row used to overflow at
+  the default window width — 'Movies' rendered letter-by-letter vertically and the Photos
+  button sat out of view. The chips now scroll horizontally and the Photos/Files toggle is
+  pinned outside the scroll region.
+- **Disconnect gets its own state.** The tab used to keep the previous phone's chips over
+  an indefinite "Loading…"; it now says *"No phone connected. Browsing resumes when a
+  paired phone reconnects."* — and reconnect refetches roots, the open folder, and the
+  photo grid automatically. This also retires "open the tab before the phone connects and
+  it stays empty": the fetch is keyed on the peer, not on tab entry.
+- **A refusal is never invisible.** Revoking the photo permission while photos were on
+  screen used to leave stale names with silently blank thumbs; the refusal banner now
+  renders above the stale content, in the file tree as well as the grid. Recovery is fixed
+  too: thumbnails re-ask after a permission is re-granted instead of staying blank until
+  the tab was closed and reopened.
+- **Two phones: an explicit picker.** With more than one phone connected, the Files tab
+  used to silently target whichever connected first. A picker row now names the choice;
+  with one phone it never renders. A picked phone that disconnects falls back to whichever
+  is still connected. (Built and reviewed; seeing it live needs a second paired phone.)
+
+Harness: `m9-test.sh` no longer pins the phone build to 0.4.0 — it expects whatever
+version the tree builds.
+
+---
+
 ## 0.4.0 (versionCode 5) — Phone file & photo browse
 
 > **Status: verified on real hardware 2026-08-14.** The on-device session ran clean —

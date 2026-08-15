@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -34,6 +35,7 @@ class BrowseEngineTest {
         File(root, BrowseEngine.TRASH_DIR).mkdirs()
         val reply = e.onEvent("peer", MirrorEvent.FsQueryList("r", "")) as MirrorEvent.FsEntries
         assertEquals(listOf("a.txt"), reply.entries.map { it.name })
+        assertFalse(reply.truncated, "a listing under the cap must not claim truncation")
     }
 
     @Test
@@ -82,11 +84,15 @@ class BrowseEngineTest {
     }
 
     @Test
-    fun listingIsCapped() = runBlocking {
+    fun listingIsCappedAndSaysSo() = runBlocking {
         val e = engine(this)
         repeat(BrowseEngine.MAX_ENTRIES + 25) { File(root, "f$it").writeText("x") }
         val reply = e.onEvent("peer", MirrorEvent.FsQueryList("r", "")) as MirrorEvent.FsEntries
         assertEquals(BrowseEngine.MAX_ENTRIES, reply.entries.size)
+        assertTrue(reply.truncated, "a capped listing must be flagged, not complete-looking")
+        // Sorted before the cap: the survivors are the alphabetical head, so which 2000 you
+        // see is deterministic rather than directory-iteration order.
+        assertEquals(reply.entries, reply.entries.sortedBy { it.name.lowercase() })
     }
 
     @Test

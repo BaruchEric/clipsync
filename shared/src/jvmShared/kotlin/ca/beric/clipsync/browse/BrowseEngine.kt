@@ -105,15 +105,18 @@ class BrowseEngine(
 
     private fun onList(q: MirrorEvent.FsQueryList): MirrorEvent {
         val abs = resolve(q.root, q.path) ?: return MirrorEvent.FsResult("list", false, "path rejected")
-        val entries = bridge.list(abs)
+        val all = bridge.list(abs)
             .filterNot { it.dir && it.name == TRASH_DIR }
             .sortedWith(
                 compareByDescending<ca.beric.clipsync.protocol.FsEntry> { it.dir }
                     .thenBy { it.name.lowercase() }
                     .thenBy { it.name },
             )
-            .take(MAX_ENTRIES)
-        return MirrorEvent.FsEntries(q.root, q.path, entries)
+        val entries = all.take(MAX_ENTRIES)
+        // Sorted before the cap, so what survives is the alphabetical head, and flagged, so
+        // the peer can say "there is more" instead of silently rendering a complete-looking
+        // 2000 (the M9.1 release-note constraint this field exists to retire).
+        return MirrorEvent.FsEntries(q.root, q.path, entries, truncated = all.size > entries.size)
     }
 
     /**

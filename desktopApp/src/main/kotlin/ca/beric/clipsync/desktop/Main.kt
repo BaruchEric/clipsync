@@ -3,7 +3,9 @@ package ca.beric.clipsync.desktop
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -203,7 +204,8 @@ fun main() {
                         val dirs = event.entries.count { it.dir }
                         println(
                             "clipsync: fs entries ${event.root}/${event.path}: ${event.entries.size}" +
-                                " ($dirs dirs, ${event.entries.size - dirs} files)${logSample(event.entries)}"
+                                " ($dirs dirs, ${event.entries.size - dirs} files)" +
+                                (if (event.truncated) " truncated" else "") + logSample(event.entries)
                         )
                     }
                     is MirrorEvent.MediaItems -> {
@@ -467,7 +469,7 @@ private fun DesktopScreen(
                 when (tab) {
                     "Notifications" -> NotificationsPane(boot)
                     "Messages" -> MessagesPane(boot)
-                    "Files" -> FilesScreen(boot)
+                    "Files" -> FilesScreen(boot, labelFor)
                     else -> HistoryScreen(repo, labelFor)
                 }
             }
@@ -623,7 +625,7 @@ private fun MessagesPane(boot: Boot) {
  * mis-click costs a restore rather than a photo.
  */
 @Composable
-private fun FilesScreen(boot: Boot) {
+private fun FilesScreen(boot: Boot, labelFor: (String) -> String) {
     val scope = rememberCoroutineScope()
     val roots by boot.fsRoots.collectAsState()
     val listing by boot.fsEntries.collectAsState()
@@ -636,9 +638,12 @@ private fun FilesScreen(boot: Boot) {
     // trash-move whatever sits at that relative path on each of them — Camera/IMG_0001.jpg
     // means different things on different phones. Targeting only the destructive ops would be
     // worse than broadcasting all of them: a listing from one phone and a delete addressed to
-    // another. First-connected-peer matches today's de-facto behaviour (there's no picker yet).
+    // another. With one phone the picker never renders and first-connected is the only choice;
+    // with more, the choice is explicit (M9.1 — it used to silently target first-connected).
+    // A picked phone that disconnects falls back to whichever is still there.
     val connected by boot.connectedPeers.collectAsState()
-    val peer = connected.firstOrNull()
+    var pickedPeer by remember { mutableStateOf<String?>(null) }
+    val peer = pickedPeer?.takeIf { it in connected } ?: connected.firstOrNull()
     var root by remember { mutableStateOf("") }
     var path by remember { mutableStateOf("") }
     var grid by remember { mutableStateOf(false) }
@@ -672,7 +677,16 @@ private fun FilesScreen(boot: Boot) {
         scope.launch { boot.mirror.send(peer, MirrorEvent.FsQueryList(r, p)) }
     }
 
-    LaunchedEffect(Unit) { boot.mirror.send(peer, MirrorEvent.FsQueryRoots) }
+    // Keyed on the peer, not Unit: opening the tab before the phone connected used to leave it
+    // empty with no retry (switch-tabs-to-retry, retired in M9.1), and switching phones must
+    // refetch everything from the newly targeted one rather than keep showing the old one's.
+    LaunchedEffect(peer) {
+        if (peer != null) {
+            boot.mirror.send(peer, MirrorEvent.FsQueryRoots)
+            if (root.isNotEmpty()) boot.mirror.send(peer, MirrorEvent.FsQueryList(root, path))
+            if (grid) boot.mirror.send(peer, MirrorEvent.MediaQuery(0, 60))
+        }
+    }
     LaunchedEffect(roots) { if (root.isEmpty() && roots.isNotEmpty()) list(roots.first().id, "") }
     LaunchedEffect(grid) {
         if (grid) boot.mirror.send(peer, MirrorEvent.MediaQuery(0, 60))
@@ -682,7 +696,14 @@ private fun FilesScreen(boot: Boot) {
     // requested set stops the loop from re-asking for ids the phone cannot produce a thumbnail
     // for — those are omitted from the reply, so `missing` would never drain without it.
     var requestedThumbs by remember { mutableStateOf(emptySet<Long>()) }
-    LaunchedEffect(photos, thumbs) {
+    // A fresh media reply resets the ask-once memory: ids that failed under a since-lifted
+    // refusal (photo permission re-granted mid-session) would otherwise stay blank until the
+    // tab was closed and reopened. Ids the phone genuinely cannot thumbnail get re-asked at
+    // most once per media reply, and media replies don't generate themselves — so no loop.
+    LaunchedEffect(mediaEpoch) { if (mediaEpoch > 0) requestedThumbs = emptySet() }
+    // requestedThumbs is a key as well: the reset above must re-run this loop even though
+    // photos and thumbs are both unchanged by a permission recovery.
+    LaunchedEffect(photos, thumbs, requestedThumbs) {
         val missing = photos.map { it.id }
             .filterNot { thumbs.containsKey(it) || it in requestedThumbs }
             .take(24)
@@ -693,13 +714,44 @@ private fun FilesScreen(boot: Boot) {
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            roots.forEach { r ->
-                TextButton(onClick = { list(r.id, "") }) {
-                    Text(r.label, fontWeight = if (r.id == root) FontWeight.Bold else FontWeight.Normal)
+        if (peer == null) {
+            // A disconnect used to leave the previous phone's chips on screen over an
+            // indefinite "Loading…" (M9 session finding 2) — an offline state of its own
+            // beats stale data pretending to be current. Reconnect refetches everything
+            // via LaunchedEffect(peer) above; nothing here needs a manual retry.
+            Text(
+                "No phone connected.\nBrowsing resumes when a paired phone reconnects.",
+                Modifier.padding(top = 24.dp),
+            )
+            return@Column
+        }
+        if (connected.size > 1) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Phone:", style = MaterialTheme.typography.labelMedium)
+                connected.sortedBy(labelFor).forEach { id ->
+                    TextButton(onClick = { pickedPeer = id }) {
+                        Text(labelFor(id), fontWeight = if (id == peer) FontWeight.Bold else FontWeight.Normal)
+                    }
                 }
             }
-            Spacer(Modifier.weight(1f))
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // The chips scroll; the Photos toggle stays pinned. A fixed Row overflowed at the
+            // default window width — 'Movies' rendered letter-by-letter vertically and the
+            // Photos button sat out of view entirely (M9 session finding 1).
+            Row(
+                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                roots.forEach { r ->
+                    TextButton(onClick = { list(r.id, "") }) {
+                        Text(r.label, fontWeight = if (r.id == root) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
             TextButton(onClick = { grid = !grid }) { Text(if (grid) "Files" else "Photos") }
         }
         if (roots.isEmpty()) {
@@ -714,16 +766,17 @@ private fun FilesScreen(boot: Boot) {
             )
             return@Column
         }
-        if (grid && photos.isEmpty()) {
-            // Not covered by the roots-empty branch above: roots are permission-independent, so
-            // with browsing on and photos denied the phone still returns roots and only the grid
-            // comes back empty. Without this the user sees a blank grid and no reason at all.
-            Text(
-                photoRefusal?.let { "The phone refused: $it." } ?: "No photos on the phone yet.",
-                Modifier.padding(top = 24.dp),
-            )
-        } else if (grid) {
-            LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), modifier = Modifier.weight(1f)) {
+        if (grid) {
+            // Shown even over a non-empty grid: a refusal that arrives while stale photos are
+            // on screen used to be invisible — the message only rendered on an empty grid,
+            // leaving 20 stale names with silently blank thumbs (M9 session finding 3).
+            photoRefusal?.let { Text("The phone refused: $it.", Modifier.padding(vertical = 4.dp)) }
+            if (photos.isEmpty()) {
+                // Not covered by the roots-empty branch above: roots are permission-independent,
+                // so with browsing on and photos denied the phone still returns roots and only
+                // the grid comes back empty. Without this: a blank grid and no reason at all.
+                if (photoRefusal == null) Text("No photos on the phone yet.", Modifier.padding(top = 24.dp))
+            } else LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), modifier = Modifier.weight(1f)) {
                 gridItems(photos, key = { it.id }) { item ->
                     Column(Modifier.padding(4.dp)) {
                         // Peer-supplied bytes. Malformed base64, or valid base64 that is not an
@@ -768,6 +821,21 @@ private fun FilesScreen(boot: Boot) {
             // this path plus that directory's entry names, which for a delete could target a
             // same-named file in the wrong folder.
             val visible = listing?.takeIf { it.root == root && it.path == path }
+            // The tree's sibling of the grid rule above: a refusal that arrives while a
+            // listing for this same spot is already on screen must not vanish behind the
+            // stale data (M9 session finding 3 was the grid; this is the same shape).
+            if (visible != null && browseRefusal != null) {
+                Text("The phone refused: $browseRefusal.", Modifier.padding(vertical = 4.dp))
+            }
+            if (visible?.truncated == true) {
+                // The 2000-entry cap used to be silent — a capped folder looked complete
+                // (0.4.0 release-note constraint, retired by the fs-entries trunc field).
+                Text(
+                    "Showing the first ${visible.entries.size} entries — this folder holds more.",
+                    Modifier.padding(vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
             if (visible == null) {
                 // A refused FsQueryList never produces a new FsEntries, so `visible` stays null
                 // forever — without this the pane would sit on "Loading…" indefinitely while the
@@ -777,10 +845,7 @@ private fun FilesScreen(boot: Boot) {
                     Modifier.padding(top = 24.dp),
                 )
             } else if (visible.entries.isEmpty()) {
-                Text(
-                    browseRefusal?.let { "The phone refused: $it." } ?: "This folder is empty.",
-                    Modifier.padding(top = 24.dp),
-                )
+                if (browseRefusal == null) Text("This folder is empty.", Modifier.padding(top = 24.dp))
             } else LazyColumn(Modifier.weight(1f)) {
                 items(visible.entries, key = { it.name }) { entry ->
                     val child = if (path.isEmpty()) entry.name else "$path/${entry.name}"

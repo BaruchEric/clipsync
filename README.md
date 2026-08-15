@@ -111,9 +111,11 @@ the phone, and the new-text observer pushed the refresh unprompted. Phone file &
 browse (M9) is **verified on-device**
 (2026-08-14): `scripts/m9-test.sh run` passed 29/0 on the SM-S921U — roots, listings,
 pull/push sha256-identical both directions, trash-first delete, rename, the consent gate,
-and the photo grid — plus all four Files-tab `ui` states. The session caught one real bug
-(MediaStore paging via a `LIMIT` sortOrder suffix, rejected on Android 11+), fixed and
-re-verified in-session; three UI findings are recorded for M9.1 in `HANDOFF.md`.
+and the photo grid — plus all four Files-tab `ui` states. The M9.1 follow-up batch
+(0.4.1, verified on-device 2026-08-15) closed that session's findings: capped listings
+are flagged ("this folder holds more"), the root chips scroll with Photos always
+reachable, disconnect gets a real offline state with automatic refetch on reconnect,
+refusals render over stale data, and two connected phones get an explicit picker.
 The parity roadmap (vs. LinkMyMac/LinkMyDroid) is in
 `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 

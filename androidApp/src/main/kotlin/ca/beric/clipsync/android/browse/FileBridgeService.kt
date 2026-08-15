@@ -18,9 +18,12 @@ class FileBridgeService : IFileBridge.Stub() {
     // ShizukuFileBridge.call{}'s fail-closed wrapper and answers an empty list, which the
     // desktop renders as "This folder is empty" for a folder full of photos. A literal, not
     // BrowseEngine.MAX_ENTRIES, so this service doesn't need to depend on :shared for one
-    // constant.
+    // constant. Capped at ONE MORE than the wire cap: the engine flags truncation by seeing
+    // more rows than it forwards, and a cap equal to the wire's makes an overfull folder
+    // indistinguishable from an exactly-full one — found on-device (M9.1): a 2005-file
+    // folder listed as an unflagged 2000.
     override fun list(dir: String): Array<String> =
-        File(dir).listFiles()?.take(2000)?.map { it.row() }?.toTypedArray() ?: emptyArray()
+        File(dir).listFiles()?.take(2001)?.map { it.row() }?.toTypedArray() ?: emptyArray()
 
     override fun stat(path: String): String? = File(path).takeIf { it.exists() }?.row()
 
