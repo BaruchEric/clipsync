@@ -419,13 +419,12 @@ private fun BrowseCard(activity: ComponentActivity) {
         val next = !on
         BrowsePrefs.setEnabled(activity, next)
         on = next
-        if (next) {
-            askMedia.launch(MediaIndex.PERMISSIONS)
-            // Bind the SHELL-uid bridge now. The bridge is only bound when browsing is on, so
-            // without this the first browse after enabling would fail until the app was
-            // relaunched.
-            AppGraph.ensureFileBridgeBound(activity)
-        }
+        if (next) askMedia.launch(MediaIndex.PERMISSIONS)
+        // Both directions, deliberately outside the `if`. Turning browsing ON binds the
+        // SHELL-uid bridge now, because it is only bound while browsing is on and the first
+        // browse would otherwise fail until the app was relaunched. Turning it OFF stops that
+        // privileged helper instead of leaving it running with nothing to answer.
+        AppGraph.ensureFileBridgeBound(activity)
     }
 }
 

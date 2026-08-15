@@ -493,9 +493,13 @@ object AppGraph {
         startSmsObserverIfGranted()
     }
 
-    /** Called when the user turns browsing on: binds the SHELL-uid bridge now rather than at next launch. */
+    /**
+     * Called when the user toggles browsing: binds the SHELL-uid bridge now rather than at next
+     * launch, and tears it down again when consent is withdrawn — turning the card off should
+     * stop the privileged helper, not just make it refuse.
+     */
     fun ensureFileBridgeBound(context: Context) {
-        if (BrowsePrefs.enabled(context)) fileBridge?.bind()
+        if (BrowsePrefs.enabled(context)) fileBridge?.bind() else fileBridge?.unbind()
     }
 
     /**

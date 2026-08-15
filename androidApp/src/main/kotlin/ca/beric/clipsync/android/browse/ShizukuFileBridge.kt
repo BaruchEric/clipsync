@@ -44,11 +44,39 @@ class ShizukuFileBridge(context: Context) : FileBridge {
         }
     }
 
-    /** Idempotent; safe to call again after a Shizuku restart. */
+    /**
+     * Idempotent; safe to call again after a Shizuku restart.
+     *
+     * **Unbinds before it binds**, and that ordering is the fix for a real leak measured on the
+     * S24 (0.4.1, 2026-08-15): `bindUserService` does *not* reuse a helper whose client process
+     * has died, so every app restart stood up a new SHELL-uid process beside the old one —
+     * 2 → 3 → 4 across two force-stop/start cycles, unbounded, each orphan a privileged process
+     * with whole-filesystem reach and no client. `.daemon(false)` cannot prevent it: a killed
+     * process never gets to run an unbind. The reap therefore has to happen on the way *in*,
+     * from the new process, keyed on the same [args] — Shizuku identifies a user service by its
+     * component, process suffix and version, not by the connection object that bound it.
+     *
+     * Both calls are wrapped: with no previous instance the unbind is a no-op, and its failure
+     * must never stop the bind that follows.
+     */
     fun bind() {
         if (!runCatching { Shizuku.pingBinder() }.getOrDefault(false)) return
+        runCatching { Shizuku.unbindUserService(args, connection, /* remove = */ true) }
         runCatching { Shizuku.bindUserService(args, connection) }
             .onFailure { Log.w(TAG, "bindUserService failed: ${it.message}") }
+    }
+
+    /**
+     * Stops the helper when consent is withdrawn. Not a security boundary — [BrowseEngine]
+     * already refuses every request while the toggle is off, before any filesystem call — but
+     * it makes the release notes' claim literally true ("the phone does not even spawn its
+     * privileged helper process") for the turn-it-back-off direction too, rather than leaving a
+     * shell-uid process alive to answer nobody.
+     */
+    fun unbind() {
+        runCatching { Shizuku.unbindUserService(args, connection, /* remove = */ true) }
+            .onFailure { Log.w(TAG, "unbindUserService failed: ${it.message}") }
+        service = null
     }
 
     /** A bound service whose binder has already died is not ready — ping, don't just null-check. */
