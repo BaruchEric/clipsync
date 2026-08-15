@@ -73,6 +73,22 @@ Known limitations, not fixed in this milestone:
   Shizuku itself keeps running (it's a killable, non-daemon process) — browsing stays dead
   until the clipsync app is relaunched. Distinct from the Shizuku-*restarts* case, which Task 9
   already covers (`Shizuku.addBinderReceivedListener`).
+  **Update 2026-08-15 (0.4.2): this row understated the problem, and the other half is fixed.**
+  Measured on the S24, the app was *leaking* one SHELL-uid helper per restart — 2 → 3 → 4 across
+  two force-stop/start cycles, with the orphans surviving `force-stop` and never reused by the
+  next bind. `bindUserService` does not reuse a helper whose client process died, and
+  `daemon(false)` can't save it (a killed process never runs an unbind), so `bind()` now unbinds
+  with `remove = true` on the way in, and consent-off tears the helper down. **Not yet verified
+  on hardware** — the phone left mid-session; reproduction steps are in RELEASE-NOTES 0.4.2.
+  The self-death re-bind case above is still open: nothing detects a bridge that dies while
+  Shizuku stays up, so browsing is still dead until relaunch (a health-check ping before each
+  request, or a binder death recipient, would close it).
+- ~~R3: `isDeclaredRootPath` compares by equality, encoding an unwritten "no root nested more
+  than one level below another" constraint~~ — **FIXED 2026-08-15 (0.4.2).** Deferred out of M9
+  deliberately (don't widen refusals in the security core before that core has run on a device);
+  that precondition was met by the M9 29/0 run and M9.1. Delete and rename now refuse a strict
+  ancestor of any declared root as well as a root itself. Proven behavior-preserving for the
+  shipping roots, and the refusal test fails against the old implementation.
 - ~~Carried from M6: `FileTransferEngine`'s transfer-state read-modify-write~~ — **FIXED in
   the 0.4.0 final review wave** (`_transfers.update { … }` at FileTransferEngine.kt:360, plus
   the same shape on incoming thumbnail batches; release-noted in 0.4.0 "Also in this release").

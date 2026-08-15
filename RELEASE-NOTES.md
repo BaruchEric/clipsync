@@ -1,5 +1,49 @@
 # Release notes
 
+## 0.4.2 (versionCode 7) — the deferred ledger, closed where it could be
+
+> **Status: PARTIALLY verified.** The desktop/shared half is verified — 125 shared tests, 0
+> failures, 1 skipped, and the security fix below is pinned by a test that provably fails
+> without it. **The Android half is built but NOT device-verified**: the phone left mid-session,
+> so the file-bridge leak fix has never run on hardware. Install 0.4.2 and re-run the
+> reproduction in "Known" below before trusting it.
+
+- **A leaked privileged helper process, found on-device and fixed.** Every clipsync restart
+  stood up a *new* SHELL-uid file-bridge process beside the old one instead of reusing it —
+  measured on the S24 going 2 → 3 → 4 across two force-stop/start cycles, unbounded. Each
+  orphan is a privileged process with whole-filesystem reach and no client left to serve.
+  `bindUserService` does not reuse a helper whose client process has died, and `daemon(false)`
+  cannot help because a killed process never runs an unbind — so the bridge now unbinds
+  (`remove = true`) on the way *in*, from the new process, keyed on the same service args.
+  Turning the browse card **off** now also stops the helper rather than leaving it running to
+  refuse requests, which is what that card's own copy already implied.
+- **Delete and rename now refuse a folder that *contains* a declared root, not just one that
+  *is* one.** The check compared paths by equality, which was sufficient only under an unwritten
+  constraint — that no root sits more than one level below another. Today's seven roots satisfy
+  it; adding, say, `internal/DCIM/Camera` would have quietly reopened the hole, and trashing
+  `DCIM` would have swallowed a declared root. The constraint is now enforced instead of
+  documented (M9 review residual R3, deferred out of M9 until the security core had run on a
+  device — it has, 29/0 in M9 and clean again in M9.1). Behavior-preserving for the roots that
+  ship: a path is newly refused only when it is a *strict* ancestor of a root, and the only such
+  path reachable is `internal` itself, which equality already refused. Both halves are pinned by
+  tests, and the refusal test fails against the old code.
+- **Harness:** `pairing-test.sh`'s `desktop_pid` no longer aborts the whole script when no
+  desktop is running — `pgrep` exits 1 on no match and `pipefail` promoted that to the
+  assignment's status under `set -e`, killing the run silently in the ordinary case. The same
+  construct was found and fixed in `m9-test.sh` during M9.1; this was its last unguarded twin,
+  recorded then as "not fixed here".
+
+### Known
+
+- **The file-bridge leak fix is unverified on hardware.** To check it: `adb shell ps -A | grep
+  filebridge`, then `am force-stop ca.beric.clipsync` and `am start` a couple of times. Before
+  the fix the count grew by one per start and old processes survived the force-stop; after it
+  the count should stay at one. Orphans from *earlier* builds are only cleared by a reboot
+  (Shizuku stops then anyway).
+- Everything else in the deferred ledger is untouched and still open — see `DEFERRED-QUESTIONS.md`.
+
+---
+
 ## 0.4.1 (versionCode 6) — M9.1: the Files tab grows up
 
 > **Status: verified on real hardware 2026-08-15.** Each fix was driven live on the

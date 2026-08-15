@@ -116,8 +116,14 @@ and the photo grid — plus all four Files-tab `ui` states. The M9.1 follow-up b
 are flagged ("this folder holds more"), the root chips scroll with Photos always
 reachable, disconnect gets a real offline state with automatic refetch on reconnect,
 refusals render over stale data, and two connected phones get an explicit picker.
-The parity roadmap (vs. LinkMyMac/LinkMyDroid) is in
-`docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
+That closed the parity roadmap's last open row; the roadmap (vs. LinkMyMac/LinkMyDroid) is in
+`docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`.
+
+**0.4.2** is the first release whose Android half is *not* yet hardware-verified. It fixes a
+leak found on-device — clipsync stood up a new SHELL-uid file-bridge helper on every restart
+instead of reusing one, unbounded — and tightens delete/rename to refuse a folder that
+*contains* a browse root, not only one that *is* a root. The desktop and shared halves are
+verified (125 tests, 0 failures); the leak fix still needs a phone. See `HANDOFF.md`.
 
 ## License
 

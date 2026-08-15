@@ -22,7 +22,7 @@ newest-first below the table.
 | M9 phone browse | 🟢 verified on-device 2026-08-14; tag `m9` after commit | `m9-test.sh run` 29/0 in a single pass (roots, list, pull/push sha256, trash-first delete, rename, consent-gate refusal, 20 media items) + all four Files-tab `ui` states; one real bug (MediaStore paging) found on-device and fixed; 3 UI findings recorded — see the session below |
 | M9.1 Files-tab follow-ups | ✅ verified on-device 2026-08-15 (0.4.1/vc6) | truncation flag live (2005-file folder → "2000 … truncated", 49-entry folder unflagged); offline state, reconnect auto-refetch, refusal-over-stale-grid, thumb recovery, and scrollable chips all screenshot-verified; `m9-test.sh run` re-ran clean (26/26 driven); peer picker built, needs a second phone to see — session below |
 
-**123 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.1/vc6); `:desktopApp:createDistributable` produces a launchable macOS app image.
+**125 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.2/vc7 — its Android-side change is **not** device-verified, see the 0.4.2 session below); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
 **Fresh clone / new worktree: write `local.properties` first.** It is gitignored, so it never
 propagates — without it `:androidApp` dies at dependency resolution with "SDK location not found"
@@ -31,6 +31,78 @@ propagates — without it `:androidApp` dies at dependency resolution with "SDK 
 ```
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
+
+## 0.4.2 session (2026-08-15, later) — deferred ledger, and a leak the device showed
+
+Unattended session against a **finished tree**: the parity roadmap's last row closed in M9.1,
+git was clean, everything through `m9.1` tagged and pushed. So this session deliberately did
+**not** open an M10 — it worked only items the project's own docs had already recorded as owed,
+and stopped. Branch `m10-deferred-ledger`, **not pushed, not tagged** (see "For Eric" below).
+
+**The find: clipsync leaks a privileged helper process on every restart.** Noticed as an
+oddity — two `ca.beric.clipsync:filebridge` processes with different ages (20:32 vs 20:09)
+while the app process was only 20:10 old, so the older one had outlived a previous app. A
+force-stop/start experiment made it unambiguous:
+
+```
+baseline    fb: 17513(21:21) 18023(20:58)
+force-stop  fb: 17513 18023                 <- survive the app's death
+start       fb: 17513 18023 20599           <- +1
+force-stop  fb: 17513 18023 20599
+start       fb: 17513 18023 20599 20712     <- +1
+```
+
+One orphaned SHELL-uid process per restart, unbounded, each with whole-filesystem reach and no
+client. The baseline already had two before this session touched anything, so it leaks in
+ordinary use, not just under a harness. Root cause: `unbindUserService` is called **nowhere in
+the tree** — `bindUserService` does not reuse a helper whose client process has died, and
+`.daemon(false)` cannot help because a killed process never runs an unbind. Fix: unbind
+(`remove = true`) on the way *in*, from the new process, keyed on the same service args; plus a
+real teardown when consent is withdrawn. Evidence kept at `build/m10-findings/` (gitignored).
+
+**Also fixed, both fully verified here:**
+- **R3** (`isDeclaredRootPath` equality → ancestor check). The recorded precondition — "don't
+  widen refusals in the security core before it has run on a device" — was met by M9's 29/0 and
+  M9.1. Verifiable without the phone, which is the point often missed about this class:
+  `BrowseEngine` is jvmShared and runs in `desktopTest` against a real temp dir. Suite 123 → 125,
+  0 failures. The refusal test was checked against a reverted implementation and **fails there**,
+  so it isn't a false pass; the behavior-preservation test passes under both implementations by
+  design, which is what makes it a control.
+- **`pairing-test.sh:87`** — the last unguarded `pgrep | head` under `pipefail`, recorded in the
+  M9.1 prep session as "same latent early-exit, not fixed here". Proven both ways: the old shape
+  exits 1 and never reaches the next line when no desktop is running; the guarded one continues
+  with an empty value.
+
+Gates: all three green (`:shared:desktopTest` 125/0/1, `:androidApp:assembleDebug`,
+`:desktopApp:createDistributable`), plus `m9-test.sh selftest` 0 failed with stdin closed and
+`bash -n` on both harnesses. 0.4.2 / vc7.
+
+**A dead branch caught in review, worth recording:** the first cut of the consent-off teardown
+added an `else fileBridge?.unbind()` to `ensureFileBridgeBound` — but its only call site sits
+inside `if (next)` in `MainActivity`, so the else could never run. The call moved outside the
+`if`. Wiring a new branch is not the same as reaching it.
+
+**Deliberately NOT done** (available, but not owed — and unverifiable while the phone is away):
+- **`FsResult` request correlation.** A refusal can misname the currently-displayed directory.
+  Real, but it's a wire-format change to a security-adjacent surface, its symptom is a wrong
+  string under fast navigation (no data loss), and there's no device to test it against.
+- **The file-bridge self-death re-bind** (health-check ping or death recipient). Related to the
+  leak but a distinct case; needs a device to provoke.
+- **Connection-glare tiebreaker, NsdManager `resolveService` migration, trash purge/restore UI,
+  peer picker live check** — the first two speculative, the third a feature, the fourth needs a
+  second paired phone.
+
+### For Eric
+
+1. **Nothing is pushed and nothing is tagged.** `main` is the deployed branch and the tags in
+   this project mean "verified on real hardware" — 0.4.2's Android half isn't, so applying one
+   unattended would devalue what m1–m9 mean. Branch `m10-deferred-ledger` is ready to merge when
+   you've seen it.
+2. **Verify the leak fix on the phone** (the one thing this session couldn't finish): install
+   0.4.2, then `adb shell ps -A | grep filebridge` around a couple of `am force-stop` /
+   `am start` cycles. The count should stay at one instead of climbing.
+3. Your phone may still carry ~4 orphaned filebridge processes from the experiment above. They
+   are harmless and a reboot clears them (Shizuku stops on reboot regardless).
 
 ## M9.1 session (2026-08-15) — the three findings fixed, VERIFIED on-device
 
