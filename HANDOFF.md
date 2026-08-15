@@ -20,9 +20,9 @@ the table.
 | GUI status pass | ✅ | status-first screens both apps, verified by on-device screenshots |
 | M7 notification mirroring + reply | ✅ tag `m7` | phone notification → Mac ~2 s; desktop reply landed back through RemoteInput (ok=true, len asserted) |
 | M8 messages | 🟢 read path verified; tag `m8` after Eric's one live send | 30 threads / 15-message fetch ~2 s each; observer on the right URIs; radio send + new-text push ride Eric's first real text |
-| M9 phone browse | 🟡 built, gate-verified only; on-device run pending | 119/0/1 shared suite, `:androidApp:assembleDebug` + `:desktopApp:createDistributable` both green; zero on-device execution of the Android half (Shizuku user service, MediaStore) or the desktop Files tab — see the M9 session below |
+| M9 phone browse | 🟡 built, gate-verified only; on-device run pending | 122/0/1 shared suite, `:androidApp:assembleDebug` + `:desktopApp:createDistributable` both green; zero on-device execution of the Android half (Shizuku user service, MediaStore) or the desktop Files tab — see the M9 session below |
 
-**119 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.0/vc5); `:desktopApp:createDistributable` produces a launchable macOS app image.
+**122 shared test cases** (`./gradlew :shared:desktopTest`), 1 skipped (opt-in mDNS smoke test), 0 failures. All three modules build; `:androidApp:assembleDebug` produces an installable APK (0.4.0/vc5); `:desktopApp:createDistributable` produces a launchable macOS app image.
 
 **Fresh clone / new worktree: write `local.properties` first.** It is gitignored, so it never
 propagates — without it `:androidApp` dies at dependency resolution with "SDK location not found"
@@ -31,6 +31,80 @@ propagates — without it `:androidApp` dies at dependency resolution with "SDK 
 ```
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
 ```
+
+## M9.1 prep (2026-08-14) — the on-device session is now one command
+
+Phone still unreachable (no adb device), so this session did everything the device does not
+gate. Branch `m9-1-harness-and-notes`, three gates green (122/0/1), nothing pushed, `m9` still
+untagged.
+
+**`scripts/m9-test.sh`** turns Task 12 Step 4 from a checklist into a driver:
+`preflight | selftest | run | ui | verify | evidence | logs | stop | clean`. `run` executes
+items 1-7 over adb with real assertions (7 roots by id, a listing that names the file, sha256
+both directions on pull and push, delete lands in `.clipsync-trash` with bytes intact, rename
+in place, and the disabled-toggle refusal); `ui` prints the four never-seen Files-tab states
+with their exact expected strings. It will **not** turn on the browse card or grant the photo
+permission — those are consent, and a harness that flips them tests a toggle it forged.
+
+**A gap this found before the device did: three of the seven harness verbs were unobservable.**
+`fs-roots`, `fs-list` and `media` answer into StateFlows that only the Files tab reads, and
+clipsync is a menu-bar app whose window does not exist until the status item is clicked — so an
+adb-driven session could see a query was *sent* and never what came back. Only `FsResult`
+logged. The desktop now logs roots, listings (with a bounded, control-char-sanitized name
+sample), media counts and thumbnail batches. Without this the harness could drive M9 but not
+assert it.
+
+Six bugs found by running the thing, and by review, rather than by reading it:
+
+- **`x && var=…` as a bare statement is fatal under `set -e`** when `x` is false. Three sites;
+  preflight died silently right after "desktop app image built" with no error at all.
+- **`pgrep | head` returns 1 under `pipefail`** when nothing matches, so `live="$(desktop_pid)"`
+  aborted the script in the ordinary case of no desktop running. The same construct is at
+  `scripts/pairing-test.sh:87` unguarded — same latent early-exit, not fixed here.
+- **The first verb after startup is silently lost.** `clipsync: identity` prints before
+  `watchMirrorCmd`'s poller is running, so the verb is written, never read, then overwritten by
+  the next one — the step times out for a reason having nothing to do with the phone. Caught by
+  a dry run against a real desktop on an isolated home: `fs-roots` vanished while the four verbs
+  after it logged fine. Fixed at both ends — `start_desktop` pings the watcher with a
+  deliberately unrecognized verb and waits for the rejection, and `send()` rewrites (safe: a
+  file still on disk was provably not consumed).
+- **`read -r _` exits the script under `set -e`.** It returns 1 at EOF, and stdin is not a TTY
+  when this is driven from an agent session, `nohup` or cron — which is the likeliest way it
+  runs at all. It would have died at the two consent prompts, *after* the destructive steps,
+  with no summary and the scratch dir and trash populated. Replaced with `prompt_until`, which
+  polls the real consent flag instead of waiting for a keypress; that also deletes the "you said
+  you did it but the flag disagrees" branch, since it waits for the state itself.
+- **`wait_for_peer` grepped for a link-up line that does not exist.** Neither `Main.kt` nor
+  `ConnectionManager` prints anything on connect — `connectedPeers` is a StateFlow read only by
+  the status UI — so it always burned its timeout and fell through with a misleading message. It
+  now polls with `fs-roots` and reads the answer the R1 change made observable: "sent=true" or
+  "no connected peer". The fix and the thing it depends on came from the same change.
+- **A leftover `logcat` corrupts the next run's evidence.** It holds an fd on the old inode while
+  `>` truncates, interleaving two runs into one sparse file. Now killed before the new one
+  starts, plus an `EXIT` trap so an early return cannot leak it. The trap deliberately does *not*
+  stop the desktop — `ui` is the next step and needs the window.
+
+`m9-test.sh selftest` pins all of these plus the false-pass case (an `expect()` that matches a
+line from an earlier step reports a pass nobody performed) and a guard that fails if a bare
+`read` ever comes back. It needs no phone and no desktop, and passes with stdin closed.
+
+Also closed: **R1** — harness verbs now address one peer, matching the Files tab, and uniformly
+across all browse verbs rather than only the destructive ones (a listing from one phone and a
+delete addressed to another is worse than broadcasting both; the Files tab's own comment makes
+that argument). Verified at runtime, not just compiled: with no peer, `fs-list`/`media`/
+`fs-delete` now log "no connected peer" while `sms-threads` still broadcasts as before. **R3**
+was deliberately *documented rather than fixed* — `isDeclaredRootPath`'s equality check encodes
+an unwritten constraint (no root nested more than one level below another), now stated in the
+KDoc with the exact one-clause fix, because widening refusals in the security core before that
+core has run on a device once is the wrong order.
+
+`RELEASE-NOTES.md` (new) carries the 0.4.0 draft and the three constraints the ledger required a
+release note for: the silent 2000-entry cap, switch-tabs-to-retry, and the two-phone targeting.
+Docs truth-up: the suite is **122**, not the 119 recorded in three places before the final fix
+wave, and the parity roadmap's "Android image capture/apply pending" row was stale since
+2026-08-12 (`DEFERRED-QUESTIONS.md` had carried the correction all along).
+
+Still device-gated, unchanged: everything in the M9 row below.
 
 ## M9 phone file & photo browse (2026-08-13) — built + gate-verified; on-device run PENDING
 
@@ -49,7 +123,7 @@ grant for the photo grid (`READ_MEDIA_VIDEO` was requested then dropped — the 
 queried it); an off-by-default phone consent card that gates every read and write; and a
 desktop Files tab (tree + Photos grid, delete confirm dialog, harness verbs in
 `watchMirrorCmd`: `fs-roots`/`fs-list`/`fs-pull`/`fs-push`/`fs-delete`/`fs-rename`/`media`).
-`versionName 0.4.0` / `versionCode 5`. Suite 75 → 119.
+`versionName 0.4.0` / `versionCode 5`. Suite 75 → 119, then 122 after the final review's fix wave.
 
 **Nothing in the Android half has executed on a device.** All 12 tasks gated on
 `:shared:desktopTest` + `:androidApp:assembleDebug` + `:desktopApp:createDistributable`

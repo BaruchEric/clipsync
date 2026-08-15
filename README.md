@@ -107,9 +107,12 @@ tailnet hardening (a photo copied on LTE reaches the Mac in ~3 s over Tailscale)
 transfer both directions, offline-copy replay on reconnect, notification mirroring with
 desktop reply, and status-first UI on both apps. Messages (M8) is built with its read path
 verified on-device; the live radio send is the last hand-verification. Phone file & photo
-browse (M9) is built and gate-verified (119 shared tests; both the Android APK and the
+browse (M9) is built and gate-verified (122 shared tests; both the Android APK and the
 desktop app build clean) but **not yet hardware-verified** — nothing in its Android half or
 its desktop Files tab has run on a real device yet, so `m9` stays untagged until that session.
+`scripts/m9-test.sh` drives and asserts that session end to end
+(`preflight | selftest | run | ui | verify | evidence | logs | stop | clean`); it deliberately
+leaves the two consent taps — the browse card and the photo permission — to you.
 The parity roadmap (vs. LinkMyMac/LinkMyDroid) is in
 `docs/superpowers/specs/2026-08-12-linkmymac-parity-roadmap.md`. See `HANDOFF.md`.
 

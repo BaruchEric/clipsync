@@ -24,7 +24,7 @@ experience*, not cloning the app.
 | LinkMyMac feature | clipsync today | Verdict |
 |---|---|---|
 | Clipboard sync (text) | ✅ done, E2E-encrypted, verified live | **ahead** (E2E crypto, tailnet, AGPL) |
-| Clipboard sync (images) | 🟡 desktop + transport done; Android capture/apply pending | close the Android half |
+| Clipboard sync (images) | ✅ done both directions | **closed 2026-08-12** — Android capture (URI-clip bytes via own resolver, SHELL-uid `content read` fallback, PNG/JPEG magic-byte sniffing) and apply (saved to `Download/clipsync` + notification, since a shell-uid `setPrimaryClip` cannot pass URI read grants to paste targets) both shipped and live-verified; the m5 LTE run copied a Gallery photo to the Mac pasteboard in ~3 s. This row read "Android capture/apply pending" until 2026-08-14; `DEFERRED-QUESTIONS.md` carried the correction from the day it landed |
 | File transfer / drag-drop ("AirDrop") | ❌ (spec'd as MVP non-goal, MVP is done) | **→ M6, this session** |
 | QR pairing, no accounts, local-only | ✅ done + SAS MITM check (stronger than reference) | ahead |
 | Android⇄Android | ✅ architecture already symmetric P2P | free differentiator — reference "not yet" |

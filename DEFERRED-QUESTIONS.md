@@ -18,10 +18,15 @@ Decisions I made without you are logged here with my reasoning, so you can veto 
   the disabled-toggle refusal, the photo-permission-denied grid state, four Files-tab
   screenshots). `m9` tags once that runs — see the "M9 phone file & photo browse" section
   below for the decisions made along the way.
+  **As of 2026-08-14 that checklist is automated**: `scripts/m9-test.sh preflight` tells you
+  what is missing, `run` drives and asserts items 1-7 over adb, and `ui` prints the four
+  Files-tab states that need your eyes. It deliberately will not turn on the browse card or
+  grant the photo permission — those two taps are yours, and a harness that flipped them would
+  be testing consent it forged. Everything else in that session is one command.
 
 ## M9 phone file & photo browse — decisions & known limitations (2026-08-13)
 
-Built and gate-verified (119 shared tests, both the Android APK and the desktop app image
+Built and gate-verified (122 shared tests, both the Android APK and the desktop app image
 build clean); the on-device session is still open, so `m9` is untagged and none of this has
 run against your phone yet. Full write-up: `HANDOFF.md`'s M9 session section.
 
@@ -94,7 +99,7 @@ Built and (where possible) verified on the emulator:
 - **TLS server does no client-auth.** A dialing peer presents no certificate; peer identity rests entirely on the `Hello` device id + the per-pair key (a wrong key fails the AEAD open). This is fine for an E2E-encrypted app but is the kind of thing a security review will flag — documented deliberately.
 - **NsdManager uses the deprecated `resolveService`/`getHost`** (deprecated API 34+) for minSdk-29 simplicity; migrate to the callback API later.
 
-## Image sync — DONE for desktop + transport; Android pending (2026-08-08)
+## Image sync — DONE, both directions (2026-08-08; Android half closed 2026-08-12)
 
 - **What's verified (each piece, not the whole composition):** (a) the engine+transport moves a 200 KB image A→B byte-identical over real TLS — announce → chunks → reassemble → integrity-check → decrypt → apply — between two in-process engines (test); (b) the real macOS pasteboard captures and applies an image within one process (test). **End-to-end Mac↔Mac is not tested** — two desktop instances can't run on one machine (they'd contend for port 47653 and the same DB), so the pieces compose by inspection, not by a test. **Mac→Android would sync but not apply** (see below).
 - **Single path (spec deviation, intentional):** every image is sent as `ImageUpdate` + chunks, even a one-chunk image. The 1 MiB "inline in the control frame" cap from the spec is not implemented as a second branch — one receive path is simpler and gets exercised by every image. Chunk size 64 KiB; images over **16 MiB are rejected** (DoS bound).

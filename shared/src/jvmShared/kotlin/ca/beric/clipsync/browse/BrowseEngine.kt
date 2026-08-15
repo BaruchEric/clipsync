@@ -90,6 +90,16 @@ class BrowseEngine(
      * root's mount point — `FsDelete(root = "internal", paths = ["DCIM"])` resolves to the
      * `camera` root's own directory. Checking only the requested root's path leaves every
      * nested root reachable, and swallowable, through its parent.
+     *
+     * EQUALITY, NOT PREFIX — and that encodes an unwritten constraint on [roots]: **no root may
+     * sit more than one level below another.** Today every declared root is a direct child of
+     * `internal`, so refusing the exact mount points is sufficient: nothing can name a directory
+     * that merely *contains* a root without naming a root itself. Add a root nested two levels
+     * down (say `internal/DCIM/Camera`) and that stops being true — deleting `DCIM` would then
+     * swallow it, silently reopening the hole this method exists to close. The one-clause fix if
+     * that day comes is `rc == abs || rc.startsWith("$abs/")`; it is deliberately not applied now
+     * because it would widen refusals in the milestone's security core before that core has run
+     * on a device even once (M9 review residual R3).
      */
     private fun isDeclaredRootPath(abs: String): Boolean = roots.any { bridge.canonical(it.path) == abs }
 
