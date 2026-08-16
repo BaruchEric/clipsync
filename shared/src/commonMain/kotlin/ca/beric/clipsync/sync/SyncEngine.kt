@@ -212,6 +212,13 @@ class SyncEngine(
 
     private suspend fun beginImageTransfer(fromDeviceId: String, update: ControlMessage.ImageUpdate) = mutex.withLock {
         if (update.chunkCount <= 0 || update.meta.size <= 0 || update.meta.size > MAX_IMAGE_BYTES) return
+        // Bound chunkCount against the announced size before it drives arrayOfNulls() in Incoming:
+        // the sealed stream is size + AEAD overhead, split into CHUNK_BYTES pieces, so anything far
+        // beyond that is abusive. Without this an ImageUpdate(chunkCount = Int.MAX_VALUE) allocates a
+        // multi-GB reference array -> OutOfMemoryError. This is the image-path twin of the file
+        // path's `offer.chunkCount != chunkCountFor(offer.size)` guard.
+        val maxChunks = (update.meta.size + SEAL_SLACK_BYTES) / CHUNK_BYTES + 1
+        if (update.chunkCount > maxChunks) return
         if (peers[fromDeviceId] == null) return
         pendingImages[update.meta.sha256] =
             Incoming(fromDeviceId, update.meta.mime, update.version, update.chunkCount, update.meta.size)

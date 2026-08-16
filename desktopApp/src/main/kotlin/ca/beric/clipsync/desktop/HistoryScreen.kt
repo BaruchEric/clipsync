@@ -14,17 +14,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import ca.beric.clipsync.core.ClipEntry
 import ca.beric.clipsync.core.ClipRepository
-import java.text.SimpleDateFormat
-import java.util.Date
+import ca.beric.clipsync.ui.formatClipTime
 
 @Composable
 fun HistoryScreen(repo: ClipRepository, labelFor: (String) -> String = { it }) {
-    val entries by repo.observeHistory().collectAsState(initial = emptyList())
+    val entries by remember(repo) { repo.observeHistory() }.collectAsState(initial = emptyList())
     MaterialTheme {
         if (entries.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -41,8 +41,6 @@ fun HistoryScreen(repo: ClipRepository, labelFor: (String) -> String = { it }) {
     }
 }
 
-private val timeFormat = SimpleDateFormat("HH:mm")
-
 @Composable
 private fun HistoryRow(entry: ClipEntry, labelFor: (String) -> String) {
     Card(Modifier.fillMaxWidth()) {
@@ -53,7 +51,7 @@ private fun HistoryRow(entry: ClipEntry, labelFor: (String) -> String) {
                 maxLines = 4,
             )
             Text(
-                "${labelFor(entry.deviceId)} · ${timeFormat.format(Date(entry.createdAtMs))}",
+                "${labelFor(entry.deviceId)} · ${formatClipTime(entry.createdAtMs)}",
                 style = MaterialTheme.typography.labelSmall,
             )
         }

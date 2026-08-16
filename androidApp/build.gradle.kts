@@ -23,6 +23,8 @@ android {
     buildFeatures {
         compose = true
         aidl = true
+        // BuildConfig.DEBUG gates the exported activity's harness intents (MainActivity).
+        buildConfig = true
     }
 
     // Netty (embedded TLS server) ships duplicate META-INF resources across its jars.

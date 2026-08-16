@@ -28,12 +28,9 @@ class DeviceIdentity(
             return Identity(row.device_id, row.device_name, ClipsyncCrypto.KeyPair(row.public_key, secret))
         }
         val keyPair = ClipsyncCrypto.generateKeyPair()
-        val deviceId = ClipsyncCrypto.randomBytes(8).toHex()
+        val deviceId = ClipsyncCrypto.toHex(ClipsyncCrypto.randomBytes(8))
         secretStore.put(secretAlias, keyPair.secretKey)
         db.identityQueries.put(deviceId, defaultName, keyPair.publicKey)
         return Identity(deviceId, defaultName, keyPair)
     }
-
-    private fun ByteArray.toHex(): String =
-        joinToString("") { ((it.toInt() and 0xFF) + 0x100).toString(16).substring(1) }
 }

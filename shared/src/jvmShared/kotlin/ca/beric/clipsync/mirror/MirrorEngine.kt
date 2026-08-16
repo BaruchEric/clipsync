@@ -5,6 +5,7 @@ import ca.beric.clipsync.protocol.ControlMessage
 import ca.beric.clipsync.protocol.MirrorCodec
 import ca.beric.clipsync.protocol.MirrorEvent
 import ca.beric.clipsync.sync.RemotePeer
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -38,7 +39,10 @@ class MirrorEngine(
                 val sealed = ClipsyncCrypto.seal(peer.perPairKey, plain)
                 peer.send(ControlMessage.Mirror.of(sealed))
                 any = true
-            }.onFailure { log("mirror send to ${peer.deviceId} failed: ${it.message}") }
+            }.onFailure {
+                if (it is CancellationException) throw it // don't swallow cancellation
+                log("mirror send to ${peer.deviceId} failed: ${it.message}")
+            }
         }
         return any
     }

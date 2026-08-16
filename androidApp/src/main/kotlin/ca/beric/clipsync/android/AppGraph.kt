@@ -84,6 +84,8 @@ object AppGraph {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private lateinit var db: ClipsyncDb
+
+    @Volatile
     private var shizuku: ShizukuClipboard? = null
 
     @Volatile
@@ -105,6 +107,7 @@ object AppGraph {
     @Volatile
     private var fileEngine: FileTransferEngine? = null
 
+    @Volatile
     private var mirrorEngine: MirrorEngine? = null
 
     @Volatile
@@ -116,6 +119,7 @@ object AppGraph {
     @Volatile
     private var mediaIndex: MediaIndex? = null
 
+    @Volatile
     private var smsBridge: SmsBridge? = null
 
     private var smsObserverStarted = false
@@ -203,7 +207,10 @@ object AppGraph {
                 log = { Log.i(TAG, it) },
             )
             browse.transfers = files
-            files.onFileReceived = { name, _ -> notifyFileReceived(appContext, name) }
+            // The saved location keys the notification, not the name: two same-named files
+            // (IMG_*.jpg from two phones) get numbered suffixes on disk, and a name-keyed id
+            // would collapse their notifications into one.
+            files.onFileReceived = { name, location -> notifyFileReceived(appContext, name, location) }
             fileEngine = files
             launch { files.transfers.collect { _transfers.value = it } }
             val sms = SmsBridge(appContext)
@@ -284,21 +291,36 @@ object AppGraph {
                 .flatMap { it.inetAddresses.toList() }
                 .filterIsInstance<Inet4Address>()
                 .mapNotNull { it.hostAddress }
+                // Sort CGNAT tailnet 100.x addresses last so the LAN address is advertised (and
+                // dialed) first — matches the desktop (Main.kt localAddresses / JmDnsDiscovery).
+                // Without it the desktop dials the phone's 100.x dead-end first and burns a full
+                // dial timeout each reconnect before reaching the live LAN address.
+                .sortedBy { if (it.startsWith("100.")) 1 else 0 }
         }.getOrDefault(emptyList())
+
+    /**
+     * Waits up to 5 s for [get] to go non-null. [startSync] initializes the sync stack in a
+     * background coroutine, so every public entry point (share target, harness hook, pair)
+     * can arrive before its component exists — one helper owns that wait-policy instead of
+     * six copy-pasted poll loops each hard-coding 100 × 50 ms.
+     */
+    private suspend fun <T : Any> awaitInit(get: () -> T?): T? {
+        var v = get()
+        var waited = 0
+        while (v == null && waited < 100) {
+            delay(50)
+            v = get()
+            waited++
+        }
+        return v
+    }
 
     /**
      * Import a peer's pairing payload and persist it. Suspends briefly until the sync
      * layer has finished initializing (identity ready), then derives the per-pair key.
      */
     suspend fun pair(peerPayloadText: String): Boolean {
-        var pm = pairingManager
-        var waited = 0
-        while (pm == null && waited < 100) {
-            delay(50)
-            pm = pairingManager
-            waited++
-        }
-        val manager = pm ?: run {
+        val manager = awaitInit { pairingManager } ?: run {
             Log.w(TAG, "pair() gave up waiting for sync init")
             return false
         }
@@ -334,14 +356,7 @@ object AppGraph {
      * briefly for [startSync] to finish, mirroring [pair].
      */
     suspend fun sendSharedFiles(context: Context, uris: List<Uri>): Int {
-        var engine = fileEngine
-        var waited = 0
-        while (engine == null && waited < 100) {
-            delay(50)
-            engine = fileEngine
-            waited++
-        }
-        val files = engine ?: run {
+        val files = awaitInit { fileEngine } ?: run {
             Log.w(TAG, "sendSharedFiles gave up waiting for sync init")
             return 0
         }
@@ -360,45 +375,22 @@ object AppGraph {
     }
 
     /** Harness hook: put [uriString] on the system clipboard as an image clip (via Shizuku). */
-    suspend fun setImageClip(uriString: String): Boolean {
-        var s = shizuku
-        var waited = 0
-        while (s == null && waited < 100) {
-            delay(50)
-            s = shizuku
-            waited++
-        }
-        return s?.setImageUri(Uri.parse(uriString)) ?: false
-    }
+    suspend fun setImageClip(uriString: String): Boolean =
+        awaitInit { shizuku }?.setImageUri(Uri.parse(uriString)) ?: false
 
     /**
      * Harness hook: put [text] on the system clipboard as if another app copied it (via
      * Shizuku, not the applier — so the poller treats it as a genuine local capture).
      */
-    suspend fun setTextClip(text: String): Boolean {
-        var s = shizuku
-        var waited = 0
-        while (s == null && waited < 100) {
-            delay(50)
-            s = shizuku
-            waited++
-        }
-        return s?.setText(text) ?: false
-    }
+    suspend fun setTextClip(text: String): Boolean =
+        awaitInit { shizuku }?.setText(text) ?: false
 
     /**
      * Harness hook: one Shizuku clipboard read, summarized (kind/length only, no content) —
      * for bisecting capture failures (e.g. does the read see anything while the keyguard is up?).
      */
     suspend fun debugReadClip(): String {
-        var s = shizuku
-        var waited = 0
-        while (s == null && waited < 100) {
-            delay(50)
-            s = shizuku
-            waited++
-        }
-        if (s == null) return "shizuku=null"
+        val s = awaitInit { shizuku } ?: return "shizuku=null"
         val sig = s.clipSignature()
         val text = s.readText()
         return "sig=${sig?.toString(16)} text=${text?.let { "len=${it.length}" } ?: "null"}"
@@ -406,14 +398,7 @@ object AppGraph {
 
     /** Harness twin of [sendSharedFiles]: streams an app-readable filesystem path to peers. */
     suspend fun sendLocalFile(path: String): Boolean {
-        var engine = fileEngine
-        var waited = 0
-        while (engine == null && waited < 100) {
-            delay(50)
-            engine = fileEngine
-            waited++
-        }
-        val files = engine ?: return false
+        val files = awaitInit { fileEngine } ?: return false
         awaitPeerConnected()
         val f = File(path)
         if (!f.isFile) return false
@@ -459,7 +444,10 @@ object AppGraph {
         }
     }
 
-    private fun notifyFileReceived(context: Context, name: String) {
+    /** [idKey] must be unique per received file (the saved location); defaults to the name
+     *  for callers that only have one (the clipboard-image applier, whose names carry a
+     *  timestamp and cannot collide). */
+    private fun notifyFileReceived(context: Context, name: String, idKey: String = name) {
         runCatching {
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(
@@ -471,7 +459,7 @@ object AppGraph {
                 PendingIntent.FLAG_IMMUTABLE,
             )
             manager.notify(
-                name.hashCode(),
+                idKey.hashCode(),
                 Notification.Builder(context, FILE_CHANNEL_ID)
                     .setSmallIcon(android.R.drawable.stat_sys_download_done)
                     .setContentTitle("Received $name")
@@ -525,7 +513,7 @@ object AppGraph {
             is MirrorEvent.SmsSend -> scope.launch {
                 val bridge = smsBridge
                 val ok = bridge != null && bridge.hasPermissions() && bridge.send(event.to, event.body)
-                mirrorEngine?.send(from, MirrorEvent.SmsSent(ok, event.to))
+                mirrorEngine?.send(from, MirrorEvent.SmsSent(ok))
                 Log.i(TAG, "sms send ok=$ok len=${event.body.length}")
             }
             // Three outcomes, not two: "browsing off", "photos not granted", and real data.

@@ -1,5 +1,6 @@
 package ca.beric.clipsync.transport
 
+import ca.beric.clipsync.crypto.ClipsyncCrypto
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
@@ -49,7 +50,6 @@ class TlsIdentity(
         }
 
         fun sha256Hex(bytes: ByteArray): String =
-            MessageDigest.getInstance("SHA-256").digest(bytes)
-                .joinToString("") { ((it.toInt() and 0xFF) + 0x100).toString(16).substring(1) }
+            ClipsyncCrypto.toHex(MessageDigest.getInstance("SHA-256").digest(bytes))
     }
 }

@@ -44,7 +44,6 @@ class SmsBridge(private val context: Context) {
         val out = mutableListOf<SmsMessage>()
         query(Telephony.Sms.CONTENT_URI, "date DESC LIMIT $limit", "thread_id = ?", arrayOf(threadId.toString())) { c ->
             out += SmsMessage(
-                address = c.getString(1).orEmpty(),
                 body = c.getString(2).orEmpty(),
                 dateMs = c.getLong(3),
                 outbound = c.getInt(4) != Telephony.Sms.MESSAGE_TYPE_INBOX,

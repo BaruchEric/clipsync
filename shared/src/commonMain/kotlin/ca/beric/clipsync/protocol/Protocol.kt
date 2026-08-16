@@ -202,7 +202,6 @@ sealed interface MirrorEvent {
     @SerialName("sms-sent")
     data class SmsSent(
         @SerialName("ok") val ok: Boolean,
-        @SerialName("to") val to: String,
     ) : MirrorEvent
 
     @Serializable
@@ -269,6 +268,7 @@ sealed interface MirrorEvent {
     data class FsPush(
         @SerialName("root") val root: String,
         @SerialName("dir") val dir: String = "",
+        @SerialName("req") val reqId: String = "",
     ) : MirrorEvent
 
     @Serializable
@@ -276,6 +276,7 @@ sealed interface MirrorEvent {
     data class FsDelete(
         @SerialName("root") val root: String,
         @SerialName("paths") val paths: List<String>,
+        @SerialName("req") val reqId: String = "",
     ) : MirrorEvent
 
     @Serializable
@@ -284,15 +285,22 @@ sealed interface MirrorEvent {
         @SerialName("root") val root: String,
         @SerialName("path") val path: String,
         @SerialName("to") val newName: String,
+        @SerialName("req") val reqId: String = "",
     ) : MirrorEvent
 
-    /** Generic answer for the mutating ops. [op] echoes "pull"/"push"/"delete"/"rename". */
+    /**
+     * Generic answer for the mutating ops. [op] echoes "pull"/"push"/"delete"/"rename".
+     * [reqId] echoes the request's id so a caller awaiting THIS request's result cannot
+     * consume a concurrent same-op one; "" from a pre-0.4.3 peer (or a non-request
+     * refusal) matches any await, which is the old op-only behavior.
+     */
     @Serializable
     @SerialName("fs-result")
     data class FsResult(
         @SerialName("op") val op: String,
         @SerialName("ok") val ok: Boolean,
         @SerialName("detail") val detail: String = "",
+        @SerialName("req") val reqId: String = "",
     ) : MirrorEvent
 }
 
@@ -307,7 +315,6 @@ data class SmsThread(
 
 @Serializable
 data class SmsMessage(
-    @SerialName("addr") val address: String,
     @SerialName("body") val body: String,
     @SerialName("date") val dateMs: Long,
     @SerialName("out") val outbound: Boolean,
@@ -326,7 +333,6 @@ data class FsEntry(
     @SerialName("name") val name: String,
     @SerialName("size") val size: Long,
     @SerialName("dir") val dir: Boolean,
-    @SerialName("mtime") val mtimeMs: Long,
     @SerialName("mime") val mime: String = "",
 )
 
@@ -338,26 +344,27 @@ data class MediaItem(
     @SerialName("size") val size: Long,
     @SerialName("date") val dateMs: Long,
     @SerialName("mime") val mime: String,
-    @SerialName("w") val width: Int = 0,
-    @SerialName("h") val height: Int = 0,
 )
+
+/**
+ * One JSON config for both wire codecs. The classDiscriminator "t" and the lenient/default
+ * flags must stay in lockstep for cross-device wire compatibility, so they are declared once
+ * rather than duplicated per codec (a flag added to one but not the other is a decode asymmetry).
+ */
+private val protocolJson = Json { classDiscriminator = "t"; ignoreUnknownKeys = true; encodeDefaults = true }
 
 /** Serializes mirror events; unknown subtypes (newer peers) decode to null and are dropped. */
 object MirrorCodec {
-    private val json = Json { classDiscriminator = "t"; ignoreUnknownKeys = true; encodeDefaults = true }
-
-    fun encode(event: MirrorEvent): String = json.encodeToString<MirrorEvent>(event)
+    fun encode(event: MirrorEvent): String = protocolJson.encodeToString<MirrorEvent>(event)
 
     fun decode(text: String): MirrorEvent? =
-        runCatching { json.decodeFromString<MirrorEvent>(text) }.getOrNull()
+        runCatching { protocolJson.decodeFromString<MirrorEvent>(text) }.getOrNull()
 }
 
 /** Serializes control messages to/from JSON text frames. */
 object ControlCodec {
-    private val json = Json { classDiscriminator = "t"; ignoreUnknownKeys = true; encodeDefaults = true }
-
-    fun encode(message: ControlMessage): String = json.encodeToString(message)
+    fun encode(message: ControlMessage): String = protocolJson.encodeToString(message)
 
     fun decode(text: String): ControlMessage? =
-        runCatching { json.decodeFromString<ControlMessage>(text) }.getOrNull()
+        runCatching { protocolJson.decodeFromString<ControlMessage>(text) }.getOrNull()
 }

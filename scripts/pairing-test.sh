@@ -21,15 +21,12 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PKG="ca.beric.clipsync"
-ACTIVITY="$PKG/ca.beric.clipsync.android.MainActivity"
 PORT=47653
 
 RUN_DIR="$REPO/build/pairing-test"
 DESKTOP_LOG="$RUN_DIR/desktop.log"
 LOGCAT_LOG="$RUN_DIR/logcat.log"
 PHONE_DB_COPY="$RUN_DIR/phone-clipsync.db"
-DESKTOP_BIN="$REPO/desktopApp/build/compose/binaries/main/app/clipsync.app/Contents/MacOS/clipsync"
 DESKTOP_APP_DIR="$HOME/Library/Application Support/clipsync"
 DESKTOP_DB="$DESKTOP_APP_DIR/history.db"
 PEER_PAYLOAD="$HOME/.clipsync/peer-payload.txt"
@@ -41,54 +38,20 @@ CMD="${1:-preflight}"
 # condition* — 'reset' then reports "phone peers: 0" without having read the DB.
 mkdir -p "$RUN_DIR"
 
-fails=0
-actions=0
-ok()     { printf '  \033[32m✓\033[0m %s\n' "$*"; }
-bad()    { printf '  \033[31m✗\033[0m %s\n' "$*"; fails=$((fails + 1)); }
-action() { printf '  \033[33m→\033[0m %s\n' "$*"; actions=$((actions + 1)); }
-info()   { printf '    %s\n' "$*"; }
-head1()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+# Shared harness helpers (ok/bad/action/info/head1, resolve_phone, a, require_phone,
+# phone_locked, desktop_pid, harness_pid, PKG/ACTIVITY/DESKTOP_BIN).
+source "$REPO/scripts/lib.sh"
+
+PHONE="$(resolve_phone || true)"
 
 # --- device -----------------------------------------------------------------
 
-# The phone shows up on adb up to three times (LAN, tailnet, mDNS) alongside an
-# emulator. Prefer a private-LAN transport: this test exercises LAN discovery and
-# dial, so routing adb itself over the tailnet would muddy what is being observed.
-# But "prefer" must mean fall back, not refuse: the LAN transport regularly sits in
-# state 'offline' while the tailnet one is live, and a USB serial carries no IP at
-# all — refusing those makes the whole harness unusable on a connected phone.
-resolve_phone() {
-  if [[ -n "${CLIPSYNC_PHONE:-}" ]]; then echo "$CLIPSYNC_PHONE"; return; fi
-  local list; list="$(adb devices -l 2>/dev/null || true)"
-  awk '/model:SM_/ && $2 == "device" && /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/ { print $1; exit }' <<<"$list" |
-    grep . ||
-    awk '/model:SM_/ && $2 == "device" { print $1; exit }' <<<"$list"
-}
-
-PHONE="$(resolve_phone || true)"
-a() { adb -s "$PHONE" "$@"; }
-
-require_phone() {
-  if [[ -z "$PHONE" ]]; then
-    bad "no phone on adb (looked for a transport with model:SM_* in state 'device')"
-    info "connect with: ~/.claude/skills/android-device/scripts/adb-wifi.sh connect"
-    info "or override:  CLIPSYNC_PHONE=<serial> $0 $CMD"
-    exit 1
-  fi
-}
-
-phone_locked() { a shell dumpsys window 2>/dev/null | grep -q 'isKeyguardShowing=true'; }
 # The Mac's Wi-Fi is not always en0 (docked Ethernet, Intel Macs); ask the routing
 # table which interface actually carries the default route.
 mac_ip()       { ipconfig getifaddr "$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')" 2>/dev/null || true; }
 # `|| true`: with pipefail an offline transport makes adb's status the pipeline's,
 # which would abort the caller's assignment under set -e with no message at all.
 phone_ip()     { a shell ip -4 addr show wlan0 2>/dev/null | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}' || true; }
-# Same `|| true`, same reason, one rung further: pgrep exits 1 when nothing matches, and
-# pipefail promotes that to the pipeline's status — so `live="$(desktop_pid)"` aborted the
-# caller under set -e in the ordinary case of no desktop running, printing nothing. Carried
-# over from the m9-test.sh fix wave, where this exact construct was found and fixed.
-desktop_pid()  { pgrep -f 'clipsync.app/Contents/MacOS/clipsync' 2>/dev/null | head -1 || true; }
 # Single-quoted SQL literals: double quotes are identifiers in SQLite and only work
 # here by way of a legacy fallback. One query, not a count followed by a select.
 peer_count()   { sqlite3 "$1" 'select count(*) from peer' 2>/dev/null || echo 0; }
@@ -247,9 +210,9 @@ cmd_run() {
   # can never refill the freshly truncated DESKTOP_LOG. Recycle the one WE started
   # (same as the stale logcat below) and refuse only on a hand-started one, whose
   # stdout goes somewhere we cannot read.
-  local live_desktop own_desktop=""
+  local live_desktop own_desktop
   live_desktop="$(desktop_pid)"
-  [[ -f "$RUN_DIR/desktop.pid" ]] && own_desktop="$(cat "$RUN_DIR/desktop.pid")"
+  own_desktop="$(harness_pid)"
   if [[ -n "$live_desktop" && "$live_desktop" == "$own_desktop" ]]; then
     kill "$live_desktop" 2>/dev/null || true
     local w=0
@@ -539,8 +502,9 @@ cmd_stop() {
   rm -f "$RUN_DIR/logcat.pid"
   # Report on the process, not on the pid file: a dead pid left on disk would read
   # as "still running" forever.
-  if [[ -f "$RUN_DIR/desktop.pid" ]] && kill -0 "$(cat "$RUN_DIR/desktop.pid")" 2>/dev/null; then
-    info "desktop clipsync left running as pid $(cat "$RUN_DIR/desktop.pid") — the next 'run' recycles it"
+  local own; own="$(harness_pid)"
+  if [[ -n "$own" ]] && kill -0 "$own" 2>/dev/null; then
+    info "desktop clipsync left running as pid $own — the next 'run' recycles it"
   else
     rm -f "$RUN_DIR/desktop.pid"
   fi

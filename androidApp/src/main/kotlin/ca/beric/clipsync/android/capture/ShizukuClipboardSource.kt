@@ -6,8 +6,8 @@ import ca.beric.clipsync.core.ClipboardSource
  * Adapts [ShizukuClipboard] to [ClipboardSource] so capture runs through the shared,
  * change-gated [ca.beric.clipsync.core.ClipboardWatcher]. Android exposes no clipboard
  * change-count to the shell binder, so the token is derived from the content itself
- * (length + hash) — that is what stops the poll loop from re-broadcasting an unchanged
- * clipboard every tick.
+ * (a 64-bit content hash) — that is what stops the poll loop from re-broadcasting an
+ * unchanged clipboard every tick.
  *
  * When Shizuku is not ready the token is a constant sentinel, so no read is emitted
  * until capture is actually available.

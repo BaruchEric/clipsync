@@ -127,11 +127,19 @@ class FileTransferEngine(
             if (toDeviceId == null) peers.values.toList() else listOfNotNull(peers[toDeviceId])
         }
         if (targets.isEmpty()) return false
-        coroutineScope { targets.forEach { peer -> launch { sendToPeer(source, peer, dest) } } }
+        // Hash once for all recipients: the offered whole-file sha256 is identical per peer, so a
+        // broadcast otherwise re-reads and re-hashes the whole file once per target. Guarded so
+        // sendFile still never throws to its callers (BrowseEngine.onPull launches it bare).
+        val sha = runCatching { source.open().use { streamSha256(it) } }.getOrNull()
+        if (sha == null) {
+            log("file send skipped — could not read ${source.name}")
+            return false
+        }
+        coroutineScope { targets.forEach { peer -> launch { sendToPeer(source, peer, sha, dest) } } }
         return true
     }
 
-    private suspend fun sendToPeer(source: FileSource, peer: RemotePeer, dest: String) {
+    private suspend fun sendToPeer(source: FileSource, peer: RemotePeer, sha: String, dest: String) {
         val idBytes = ClipsyncCrypto.randomBytes(TRANSFER_ID_BYTES)
         val id = ClipsyncCrypto.toHex(idBytes)
         val chunkCount = chunkCountFor(source.size)
@@ -139,9 +147,6 @@ class FileTransferEngine(
         mutex.withLock { outgoing[id] = state }
         upsertState(TransferState(id, peer.deviceId, source.name, source.size, outbound = true))
         try {
-            // Hash first: the offer must carry the whole-file sha256 the receiver verifies,
-            // so sending costs one extra sequential read pass before streaming starts.
-            val sha = source.open().use { streamSha256(it) }
             peer.send(ControlMessage.FileOffer(id, source.name, source.size, source.mime, sha, chunkCount, dest))
             var acked = withTimeout(offerAckTimeoutMs) { state.acks.receive() }
             source.open().use { input ->

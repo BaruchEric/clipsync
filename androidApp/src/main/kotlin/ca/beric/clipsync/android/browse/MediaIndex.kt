@@ -38,8 +38,6 @@ class MediaIndex(context: Context) {
             MediaStore.Images.Media.SIZE,
             MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.MIME_TYPE,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT,
         )
         // MediaProvider on R+ parses sortOrder strictly and rejects a LIMIT/OFFSET suffix
         // ("Invalid token LIMIT" — found on-device, Android 16). Paging goes through the
@@ -66,8 +64,6 @@ class MediaIndex(context: Context) {
                         size = c.getLong(2),
                         dateMs = c.getLong(3) * 1000L, // DATE_MODIFIED is seconds
                         mime = c.getString(4).orEmpty(),
-                        width = c.getInt(5),
-                        height = c.getInt(6),
                     )
                 }
             }

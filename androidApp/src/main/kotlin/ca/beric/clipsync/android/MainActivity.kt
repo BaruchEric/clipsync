@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import ca.beric.clipsync.BuildConfig
 import ca.beric.clipsync.R
 import ca.beric.clipsync.android.browse.BrowsePrefs
 import ca.beric.clipsync.android.browse.MediaIndex
@@ -62,12 +63,13 @@ import ca.beric.clipsync.android.capture.NotifMirrorService
 import ca.beric.clipsync.android.capture.SyncForegroundService
 import ca.beric.clipsync.android.capture.TestReplyReceiver
 import ca.beric.clipsync.core.ClipEntry
-import ca.beric.clipsync.core.LOCAL_DEVICE_ID
 import ca.beric.clipsync.crypto.ClipsyncCrypto
-import ca.beric.clipsync.pairing.Peer
 import ca.beric.clipsync.transfer.TransferState
-import java.text.SimpleDateFormat
-import java.util.Date
+import ca.beric.clipsync.ui.deviceLabeler
+import ca.beric.clipsync.ui.formatClipTime
+import ca.beric.clipsync.ui.peerStatusLine
+import ca.beric.clipsync.ui.statusLine
+import ca.beric.clipsync.ui.transferDetail
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
@@ -123,8 +125,13 @@ class MainActivity : ComponentActivity() {
     /**
      * adb harness hook (share-sheet is the real path):
      *   adb shell am start -n ca.beric.clipsync/.MainActivity --es send_file_path <app-readable path>
+     *
+     * Debug builds only: this activity is exported, so on a release build these extras would
+     * let ANY installed app read/write the clipboard and exfiltrate files with a bare
+     * startActivity. The harness always drives the debug APK, so gating costs it nothing.
      */
     private fun handleSendPathIntent(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
         intent?.getStringExtra("send_file_path")?.let { path ->
             AppGraph.scope.launch {
                 val ok = AppGraph.sendLocalFile(path)
@@ -182,8 +189,13 @@ class MainActivity : ComponentActivity() {
      * Accepts a peer's pairing payload injected via
      *   adb shell am start -n ca.beric.clipsync/.MainActivity --es pairing_payload_b64 <base64>
      * Base64 avoids the double shell-quoting hazard of passing raw JSON through adb.
+     *
+     * Debug builds only, same as [handleSendPathIntent]: on a release build this would let
+     * any installed app silently pair its own peer (persist it + derive a key) with no
+     * confirmation UI. QR scan and the share sheet are the real paths.
      */
     private fun handlePairingIntent(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
         val payload = intent?.let { readPayloadExtra(it) } ?: return
         AppGraph.scope.launch {
             val ok = AppGraph.pair(payload)
@@ -273,7 +285,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Screen() {
         val tick by refreshTick
-        val entries by AppGraph.repo.observeHistory().collectAsState(initial = emptyList())
+        val entries by remember { AppGraph.repo.observeHistory() }.collectAsState(initial = emptyList())
         MaterialTheme {
             Column(
                 // safeDrawingPadding: targetSdk 36 is edge-to-edge, so without it the header
@@ -283,19 +295,14 @@ class MainActivity : ComponentActivity() {
             ) {
                 val connected by AppGraph.connectedPeers.collectAsState()
                 val peers = remember(connected, tick) { AppGraph.peerStore.all() }
-                val labelFor = remember(peers) {
-                    { id: String ->
-                        if (id == LOCAL_DEVICE_ID) "This phone"
-                        else peers.firstOrNull { it.deviceId == id }?.deviceName ?: id.take(8)
-                    }
-                }
+                val labelFor = remember(peers) { deviceLabeler("This phone", peers) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "clipsync",
                         style = MaterialTheme.typography.headlineSmall,
                         modifier = Modifier.weight(1f),
                     )
-                    StatusChip(connected.isNotEmpty(), statusText(connected, peers))
+                    StatusChip(connected.isNotEmpty(), statusLine(connected, peers))
                 }
                 peers.forEach { p ->
                     PeerRow(p.deviceName, ClipsyncCrypto.shortAuthString(p.perPairKey), p.deviceId in connected)
@@ -441,15 +448,6 @@ private fun DisclosureCard(onProceed: () -> Unit) {
     }
 }
 
-private fun statusText(connected: Set<String>, peers: List<Peer>): String {
-    val names = peers.filter { it.deviceId in connected }.map { it.deviceName }
-    return when {
-        names.isNotEmpty() -> "Connected to ${names.joinToString()}"
-        peers.isNotEmpty() -> "Waiting for ${peers.joinToString { it.deviceName }}"
-        else -> "Not paired yet"
-    }
-}
-
 private val ConnectedGreen = Color(0xFF2E7D32)
 private val OfflineGray = Color(0xFF8E8E93)
 
@@ -478,10 +476,7 @@ private fun PeerRow(name: String, sas: String, on: Boolean) {
         StatusDot(on)
         Column {
             Text(name, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                (if (on) "Connected" else "Not connected — syncs on reconnect") + " · code $sas",
-                style = MaterialTheme.typography.labelSmall,
-            )
+            Text(peerStatusLine(on, sas), style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -490,12 +485,7 @@ private fun PeerRow(name: String, sas: String, on: Boolean) {
 private fun TransferRow(t: TransferState, labelFor: (String) -> String) {
     val direction = if (t.outbound) "→ ${labelFor(t.peerDeviceId)}" else "← ${labelFor(t.peerDeviceId)}"
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        val detail = when (t.status) {
-            TransferState.Status.ACTIVE -> "${formatBytes(t.transferredBytes)} / ${formatBytes(t.sizeBytes)}"
-            TransferState.Status.DONE -> if (t.outbound) "sent" else t.detail ?: "received"
-            TransferState.Status.FAILED -> "failed: ${t.detail}"
-        }
-        Text("$direction  ${t.name} — $detail", style = MaterialTheme.typography.labelSmall, maxLines = 2)
+        Text("$direction  ${t.name} — ${transferDetail(t)}", style = MaterialTheme.typography.labelSmall, maxLines = 2)
         if (t.status == TransferState.Status.ACTIVE && t.sizeBytes > 0) {
             val fraction = (t.transferredBytes.toFloat() / t.sizeBytes).coerceIn(0f, 1f)
             Box(
@@ -507,15 +497,6 @@ private fun TransferRow(t: TransferState, labelFor: (String) -> String) {
         }
     }
 }
-
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1 shl 30 -> "%.1f GB".format(bytes / (1 shl 30).toDouble())
-    bytes >= 1 shl 20 -> "%.1f MB".format(bytes / (1 shl 20).toDouble())
-    bytes >= 1 shl 10 -> "%.0f KB".format(bytes / (1 shl 10).toDouble())
-    else -> "$bytes B"
-}
-
-private val timeFormat = SimpleDateFormat("HH:mm")
 
 @Composable
 private fun ColumnScope.HistoryList(entries: List<ClipEntry>, labelFor: (String) -> String) {
@@ -538,7 +519,7 @@ private fun ColumnScope.HistoryList(entries: List<ClipEntry>, labelFor: (String)
                             maxLines = 4,
                         )
                         Text(
-                            "${labelFor(entry.deviceId)} · ${timeFormat.format(Date(entry.createdAtMs))}",
+                            "${labelFor(entry.deviceId)} · ${formatClipTime(entry.createdAtMs)}",
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }

@@ -73,10 +73,14 @@ import ca.beric.clipsync.protocol.MirrorEvent
 import ca.beric.clipsync.protocol.SmsMessage
 import ca.beric.clipsync.protocol.SmsThread
 import ca.beric.clipsync.pairing.PairingManager
-import ca.beric.clipsync.pairing.Peer
 import ca.beric.clipsync.pairing.PeerStore
 import ca.beric.clipsync.pairing.pairedLogLine
 import ca.beric.clipsync.sync.DesktopClipboardApplier
+import ca.beric.clipsync.ui.deviceLabeler
+import ca.beric.clipsync.ui.formatClipTime
+import ca.beric.clipsync.ui.peerStatusLine
+import ca.beric.clipsync.ui.statusLine
+import ca.beric.clipsync.ui.transferDetail
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transfer.FileSource
 import ca.beric.clipsync.transfer.FileTransferEngine
@@ -85,7 +89,6 @@ import ca.beric.clipsync.transfer.TransferState
 import ca.beric.clipsync.transport.ConnectionManager
 import ca.beric.clipsync.transport.PeerDialer
 import ca.beric.clipsync.transport.TlsIdentityStore
-import java.util.Date
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -171,6 +174,7 @@ fun main() {
         val mediaItems = MutableStateFlow(emptyList<MediaItem>())
         val thumbs = MutableStateFlow(emptyMap<Long, String>())
         val fsResults = MutableSharedFlow<MirrorEvent.FsResult>(extraBufferCapacity = 16)
+        val smsSent = MutableSharedFlow<MirrorEvent.SmsSent>(extraBufferCapacity = 4)
         // Monotonic "a reply arrived" counters. Needed because neither payload can carry that
         // signal on its own: MediaItems(emptyList()) is a legitimate success that looks empty,
         // and FsEntries is a data class, so re-listing an unchanged directory produces a value
@@ -193,7 +197,10 @@ fun main() {
                         smsMessages.update { it + (event.threadId to event.messages) }
                         println("clipsync: sms thread ${event.threadId}: ${event.messages.size} messages")
                     }
-                    is MirrorEvent.SmsSent -> println("clipsync: sms send ok=${event.ok}")
+                    is MirrorEvent.SmsSent -> {
+                        println("clipsync: sms send ok=${event.ok}")
+                        smsSent.tryEmit(event)
+                    }
                     is MirrorEvent.FsRoots -> {
                         fsRoots.value = event.roots
                         println("clipsync: fs roots: ${event.roots.size} [${event.roots.joinToString(",") { it.id }}]")
@@ -274,11 +281,11 @@ fun main() {
         // File-based pairing bootstrap kept for headless testing (QR is the primary path).
         File(File(System.getProperty("user.home"), ".clipsync").apply { mkdirs() }, "my-payload.txt").writeText(myPayload)
         watchPeerPayload(appScope, pairing)
-        watchSendFile(appScope, fileEngine)
+        watchSendFile(appScope, fileEngine, manager.connectedPeers)
         println("clipsync: identity ${identity.deviceId}, TLS fp ${tls.fingerprint}, server :$SYNC_PORT")
         Boot(
             engine, fileEngine, identity.deviceName, manager.connectedPeers, myPayload,
-            mirrorEngine, phoneNotifs, notifPings, smsThreads, smsMessages,
+            mirrorEngine, phoneNotifs, notifPings, smsThreads, smsMessages, smsSent,
             fsRoots, fsEntries, mediaItems, thumbs, fsResults, fsEpoch, mediaEpoch,
         )
     }
@@ -384,6 +391,7 @@ private class Boot(
     val notifPings: MutableSharedFlow<MirrorEvent.NotifPosted>,
     val smsThreads: StateFlow<List<SmsThread>>,
     val smsMessages: StateFlow<Map<Long, List<SmsMessage>>>,
+    val smsSent: MutableSharedFlow<MirrorEvent.SmsSent>,
     val fsRoots: StateFlow<List<FsRoot>>,
     val fsEntries: StateFlow<MirrorEvent.FsEntries?>,
     val mediaItems: StateFlow<List<MediaItem>>,
@@ -401,15 +409,8 @@ private suspend fun sendLocalFile(fileEngine: FileTransferEngine, file: File) {
     if (!fileEngine.sendFile(source)) println("clipsync: file send skipped — no peers connected")
 }
 
-/** One status line shared by the tray, the window title, and the header chip. */
-private fun statusLine(connected: Set<String>, peers: List<Peer>): String {
-    val names = peers.filter { it.deviceId in connected }.map { it.deviceName }
-    return when {
-        names.isNotEmpty() -> "Connected to ${names.joinToString()}"
-        peers.isNotEmpty() -> "Waiting for ${peers.joinToString { it.deviceName }}"
-        else -> "Not paired yet"
-    }
-}
+/** Short random correlation id for a mirror request whose FsResult the caller awaits. */
+private fun newReqId(): String = java.util.UUID.randomUUID().toString().take(8)
 
 /** Window content: device status first, then sending, the tabbed panes, and pairing. */
 @Composable
@@ -423,12 +424,7 @@ private fun DesktopScreen(
     MaterialTheme {
         // Recompute the paired list whenever the connected set changes (e.g. a new pairing).
         val peers = remember(connected) { peerStore.all() }
-        val labelFor = remember(peers) {
-            { id: String ->
-                if (id == LOCAL_DEVICE_ID) "This Mac"
-                else peers.firstOrNull { it.deviceId == id }?.deviceName ?: id.take(8)
-            }
-        }
+        val labelFor = remember(peers) { deviceLabeler("This Mac", peers) }
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("clipsync", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
@@ -499,7 +495,7 @@ private fun NotificationsPane(boot: Boot) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("${n.app} — ${n.title}", style = MaterialTheme.typography.titleSmall)
                     Text(n.text, style = MaterialTheme.typography.bodyMedium, maxLines = 4)
-                    Text(notifTimeFormat.format(Date(n.whenMs)), style = MaterialTheme.typography.labelSmall)
+                    Text(formatClipTime(n.whenMs), style = MaterialTheme.typography.labelSmall)
                     if (n.canReply) {
                         var reply by remember(n.key) { mutableStateOf("") }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -559,7 +555,7 @@ private fun MessagesPane(boot: Boot) {
                                 Text(t.address, style = MaterialTheme.typography.titleSmall)
                                 Text(t.snippet, style = MaterialTheme.typography.bodySmall, maxLines = 2)
                                 Text(
-                                    "${notifTimeFormat.format(Date(t.dateMs))} · ${t.count} recent",
+                                    "${formatClipTime(t.dateMs)} · ${t.count} recent",
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -587,7 +583,7 @@ private fun MessagesPane(boot: Boot) {
                                 if (m.outbound) "→ ${m.body}" else m.body,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
-                            Text(notifTimeFormat.format(Date(m.dateMs)), style = MaterialTheme.typography.labelSmall)
+                            Text(formatClipTime(m.dateMs), style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
@@ -607,8 +603,13 @@ private fun MessagesPane(boot: Boot) {
                         draft = ""
                         scope.launch {
                             boot.mirror.send(null, MirrorEvent.SmsSend(thread.address, body))
-                            // Refresh shortly after; the phone also pushes on provider changes.
-                            kotlinx.coroutines.delay(2500)
+                            // Await the phone's SmsSent ack (not a blind sleep — a slow send
+                            // used to outlive the old 2.5 s delay), then give the provider a
+                            // beat to insert the outbound row before re-querying. The phone
+                            // also pushes on provider changes, so a lost ack only costs the
+                            // immediate refresh.
+                            withTimeoutOrNull(5_000) { boot.smsSent.first() }
+                            kotlinx.coroutines.delay(1000)
                             boot.mirror.send(null, MirrorEvent.SmsQueryThread(thread.threadId))
                         }
                     },
@@ -675,6 +676,35 @@ private fun FilesScreen(boot: Boot, labelFor: (String) -> String) {
         root = r
         path = p
         scope.launch { boot.mirror.send(peer, MirrorEvent.FsQueryList(r, p)) }
+    }
+
+    // One shape for both mutating ops (delete and rename share it):
+    // - A null peer refuses rather than falling through to mirror.send(null, …), which
+    //   broadcasts to every connected peer — exactly what the one-target rule (I1) prevents.
+    // - The FsResult is awaited before re-listing rather than firing both events back to
+    //   back: the phone dispatches each browse event independently on Dispatchers.IO, so a
+    //   fire-and-forget list races the mutation and usually wins, rendering the pre-mutation
+    //   state with no second refresh ever coming. A timeout means a lost reply can't wedge
+    //   the UI.
+    // - The await matches THIS request's id, not just the op string — two overlapping
+    //   same-op requests used to consume each other's result. An empty echoed id (a
+    //   pre-0.4.3 phone) matches any await, which is the old op-only behavior.
+    fun mutateThenRelist(op: String, event: (String) -> MirrorEvent) {
+        val sendTo = peer
+        if (sendTo == null) {
+            refusals = refusals + (op to "no phone connected")
+            return
+        }
+        val reqId = newReqId()
+        val r = root
+        val p = path
+        scope.launch {
+            boot.mirror.send(sendTo, event(reqId))
+            withTimeoutOrNull(5_000) {
+                boot.fsResults.first { it.op == op && (it.reqId.isEmpty() || it.reqId == reqId) }
+            }
+            boot.mirror.send(sendTo, MirrorEvent.FsQueryList(r, p))
+        }
     }
 
     // Keyed on the peer, not Unit: opening the tab before the phone connected used to leave it
@@ -808,7 +838,7 @@ private fun FilesScreen(boot: Boot, labelFor: (String) -> String) {
             }
         } else {
             if (path.isNotEmpty()) {
-                TextButton(onClick = { list(root, path.substringBeforeLast('/', "")) }) { Text("← ${path.ifEmpty { "/" }}") }
+                TextButton(onClick = { list(root, path.substringBeforeLast('/', "")) }) { Text("← $path") }
             }
             // A refused delete or rename otherwise just closes its dialog, leaving a listing
             // that looks unchanged and no way to tell "it failed" from "it worked invisibly".
@@ -876,26 +906,7 @@ private fun FilesScreen(boot: Boot, labelFor: (String) -> String) {
                 TextButton(onClick = {
                     val paths = confirm
                     confirm = emptyList()
-                    val sendTo = peer
-                    // A null peer must refuse, not fall through to mirror.send(null, …), which
-                    // broadcasts to every connected peer — exactly what I1 exists to prevent.
-                    // "No target known" is a narrower window than a stale null, but it's still a
-                    // window worth closing rather than silently widening the blast radius.
-                    if (sendTo == null) {
-                        refusals = refusals + ("delete" to "no phone connected")
-                    } else {
-                        scope.launch {
-                            boot.mirror.send(sendTo, MirrorEvent.FsDelete(root, paths))
-                            // Await the FsResult before re-listing rather than firing both events
-                            // back to back: the phone dispatches each browse event independently
-                            // on Dispatchers.IO, so a bare fire-and-forget list races the delete
-                            // and usually wins — delete costs many more canonical()/Binder round
-                            // trips — and the pane renders the pre-delete state with no second
-                            // refresh ever coming. A timeout means a lost reply can't wedge the UI.
-                            withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "delete" } }
-                            boot.mirror.send(sendTo, MirrorEvent.FsQueryList(root, path))
-                        }
-                    }
+                    mutateThenRelist("delete") { reqId -> MirrorEvent.FsDelete(root, paths, reqId) }
                 }) { Text("Move to trash") }
             },
             dismissButton = { TextButton(onClick = { confirm = emptyList() }) { Text("Cancel") } },
@@ -911,27 +922,13 @@ private fun FilesScreen(boot: Boot, labelFor: (String) -> String) {
             confirmButton = {
                 TextButton(onClick = {
                     renaming = null
-                    val sendTo = peer
-                    // See the delete handler above: refuse rather than fall through to a
-                    // broadcast send when no peer is known.
-                    if (sendTo == null) {
-                        refusals = refusals + ("rename" to "no phone connected")
-                    } else {
-                        scope.launch {
-                            boot.mirror.send(sendTo, MirrorEvent.FsRename(root, target, name))
-                            // Same race as delete above: await the reply before re-listing.
-                            withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "rename" } }
-                            boot.mirror.send(sendTo, MirrorEvent.FsQueryList(root, path))
-                        }
-                    }
+                    mutateThenRelist("rename") { reqId -> MirrorEvent.FsRename(root, target, name, reqId) }
                 }) { Text("Rename") }
             },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
     }
 }
-
-private val notifTimeFormat = java.text.SimpleDateFormat("HH:mm")
 
 private val ConnectedGreen = Color(0xFF2E7D32)
 private val OfflineGray = Color(0xFF8E8E93)
@@ -961,10 +958,7 @@ private fun PeerRow(name: String, sas: String, on: Boolean) {
         StatusDot(on)
         Column {
             Text(name, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                (if (on) "Connected" else "Not connected — syncs on reconnect") + " · code $sas",
-                style = MaterialTheme.typography.labelSmall,
-            )
+            Text(peerStatusLine(on, sas), style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -987,12 +981,7 @@ private fun PairMoreFooter(myPayload: String) {
 private fun TransferRow(t: TransferState, labelFor: (String) -> String) {
     val direction = if (t.outbound) "→ ${labelFor(t.peerDeviceId)}" else "← ${labelFor(t.peerDeviceId)}"
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        val detail = when (t.status) {
-            TransferState.Status.ACTIVE -> "${formatBytes(t.transferredBytes)} / ${formatBytes(t.sizeBytes)}"
-            TransferState.Status.DONE -> if (t.outbound) "sent" else t.detail ?: "received"
-            TransferState.Status.FAILED -> "failed: ${t.detail}"
-        }
-        Text("$direction  ${t.name} — $detail", style = MaterialTheme.typography.labelSmall, maxLines = 2)
+        Text("$direction  ${t.name} — ${transferDetail(t)}", style = MaterialTheme.typography.labelSmall, maxLines = 2)
         if (t.status == TransferState.Status.ACTIVE && t.sizeBytes > 0) {
             val fraction = (t.transferredBytes.toFloat() / t.sizeBytes).coerceIn(0f, 1f)
             Box(
@@ -1005,20 +994,17 @@ private fun TransferRow(t: TransferState, labelFor: (String) -> String) {
     }
 }
 
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1 shl 30 -> "%.1f GB".format(bytes / (1 shl 30).toDouble())
-    bytes >= 1 shl 20 -> "%.1f MB".format(bytes / (1 shl 20).toDouble())
-    bytes >= 1 shl 10 -> "%.0f KB".format(bytes / (1 shl 10).toDouble())
-    else -> "$bytes B"
-}
-
 /**
  * Polls ~/.clipsync/send-file.txt: writing an absolute path there streams that file to the
  * connected peers, and the file is deleted once consumed. Headless-harness hook in the
  * peer-payload.txt idiom — drag-and-drop and the picker are the real UI; an on-device run
  * needs a scriptable send with assertable logs.
  */
-private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine) {
+private fun watchSendFile(
+    scope: CoroutineScope,
+    fileEngine: FileTransferEngine,
+    connectedPeers: StateFlow<Set<String>>,
+) {
     val file = File(File(System.getProperty("user.home"), ".clipsync"), "send-file.txt")
     scope.launch {
         var last: String? = null
@@ -1032,6 +1018,11 @@ private fun watchSendFile(scope: CoroutineScope, fileEngine: FileTransferEngine)
                 runCatching { file.delete() }
                 val f = File(text)
                 if (f.isFile) {
+                    // A send queued right after launch used to no-op silently: the engine
+                    // drops a send with no connected peer, and the dialer may still be
+                    // connecting. Same wait the Android send paths do (awaitPeerConnected).
+                    withTimeoutOrNull(20_000) { connectedPeers.first { it.isNotEmpty() } }
+                        ?: println("clipsync: send-file: no peer connected after 20s; sending anyway (will no-op)")
                     println("clipsync: send-file start path=$text size=${f.length()}")
                     sendLocalFile(fileEngine, f)
                 } else {
@@ -1162,8 +1153,12 @@ private fun handleFsPush(scope: CoroutineScope, boot: Boot, parts: List<String>)
         return
     }
     scope.launch {
-        boot.mirror.send(target, MirrorEvent.FsPush(root, dir))
-        val result = withTimeoutOrNull(5_000) { boot.fsResults.first { it.op == "push" } }
+        val reqId = newReqId()
+        boot.mirror.send(target, MirrorEvent.FsPush(root, dir, reqId))
+        // Correlate on the id, accepting a pre-0.4.3 phone's un-echoed ("") result too.
+        val result = withTimeoutOrNull(5_000) {
+            boot.fsResults.first { it.op == "push" && (it.reqId.isEmpty() || it.reqId == reqId) }
+        }
         if (result == null || !result.ok) {
             println("clipsync: fs-push: refused: ${result?.detail ?: "timed out waiting for a reply"}")
             return@launch

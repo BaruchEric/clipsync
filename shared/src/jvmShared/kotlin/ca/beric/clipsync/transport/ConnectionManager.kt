@@ -5,6 +5,7 @@ import ca.beric.clipsync.protocol.ControlMessage
 import ca.beric.clipsync.sync.RemotePeer
 import ca.beric.clipsync.sync.SyncEngine
 import ca.beric.clipsync.transfer.FileTransferEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -104,10 +105,14 @@ class ConnectionManager(
         try {
             for (endpoint in endpoints) {
                 val (host, port) = parseEndpoint(endpoint) ?: continue
-                val link = runCatching { ClipClient.connect(host, port, fingerprint) }.getOrNull() ?: continue
+                val link = runCatching { ClipClient.connect(host, port, fingerprint) }
+                    .onFailure { if (it is CancellationException) throw it } // don't swallow cancellation
+                    .getOrNull() ?: continue
                 // Report whether a peer actually registered (Hello accepted), NOT merely that
                 // the socket opened — else an unknown-peer/glare close would reset the backoff.
-                return runCatching { handleLink(link) }.getOrDefault(false)
+                return runCatching { handleLink(link) }
+                    .onFailure { if (it is CancellationException) throw it }
+                    .getOrDefault(false)
             }
             return false
         } finally {

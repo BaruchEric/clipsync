@@ -75,7 +75,6 @@ class JvmFileBridge : FileBridge {
         name = name,
         size = if (isDirectory) 0L else length(),
         dir = isDirectory,
-        mtimeMs = lastModified(),
         mime = if (isDirectory) "" else guessMime(name),
     )
 

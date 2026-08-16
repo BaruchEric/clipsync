@@ -73,12 +73,29 @@ class ShizukuClipboard(private val context: Context) {
         if (clip.itemCount == 0) return null
         val item = clip.getItemAt(0)
         item.text?.toString()?.let { text ->
-            return (text.length.toLong() shl 32) xor (text.hashCode().toLong() and 0xFFFFFFFFL)
+            // ushr 2 clears the top bits: text tokens stay disjoint from URI_TOKEN_BIT
+            // and from the poller's negative NOT_READY/EMPTY sentinels.
+            return fnv1a64(text) ushr 2
         }
         item.uri?.toString()?.let { uri ->
-            return URI_TOKEN_BIT or (uri.hashCode().toLong() and 0xFFFFFFFFL)
+            return URI_TOKEN_BIT or (fnv1a64(uri) ushr 2)
         }
         return null
+    }
+
+    /**
+     * 64-bit FNV-1a over the string's UTF-16 units. String.hashCode() is only 32 bits, and
+     * this signature is the sole gate deciding whether a copy fires a capture — a collision
+     * between two same-length texts would make a genuine copy silently never sync, with
+     * nothing logged. 64 bits puts that out of reach.
+     */
+    private fun fnv1a64(s: String): Long {
+        var h = -0x340d631b7bdddcdbL // FNV-1a 64 offset basis 0xcbf29ce484222325
+        for (ch in s) {
+            h = (h xor (ch.code.toLong() and 0xFF)) * FNV_PRIME
+            h = (h xor (ch.code.toLong() ushr 8)) * FNV_PRIME
+        }
+        return h
     }
 
     /**
@@ -226,5 +243,6 @@ class ShizukuClipboard(private val context: Context) {
         private const val TAG = "clipsyncShizuku"
         private const val MAX_IMAGE_BYTES = 16 * 1024 * 1024 // matches the engine's image cap
         private const val URI_TOKEN_BIT = 0x4000_0000_0000_0000L // disjoint from text tokens
+        private const val FNV_PRIME = 0x100000001b3L
     }
 }

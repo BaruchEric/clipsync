@@ -43,7 +43,7 @@ class BrowseEngine(
     /** Answers one browse request, or null when the event isn't ours / the answer is bytes. */
     suspend fun onEvent(fromDeviceId: String, event: MirrorEvent): MirrorEvent? {
         val op = opNameOf(event) ?: return null
-        if (!enabled()) return MirrorEvent.FsResult(op, false, "browsing disabled")
+        if (!enabled()) return MirrorEvent.FsResult(op, false, "browsing disabled", reqIdOf(event))
         return when (event) {
             is MirrorEvent.FsQueryRoots -> MirrorEvent.FsRoots(roots.map { FsRoot(it.id, it.label) })
             is MirrorEvent.FsQueryList -> onList(event)
@@ -133,23 +133,26 @@ class BrowseEngine(
      * nothing — we never fall back to copy-then-unlink, which could half-delete a file.
      */
     private fun onDelete(req: MirrorEvent.FsDelete): MirrorEvent {
-        val rootPath = resolve(req.root, "") ?: return MirrorEvent.FsResult("delete", false, "path rejected")
+        val rootPath = resolve(req.root, "")
+            ?: return MirrorEvent.FsResult("delete", false, "path rejected", req.reqId)
         // Confine the trash directory itself, exactly as onRename confines its target. A
         // symlinked .clipsync-trash would otherwise be followed by mkdirs/renameTo and land
         // deleted files outside the root — the destination has to be checked, not assumed.
         val trash = confineAbsolute("$rootPath/$TRASH_DIR")
-            ?: return MirrorEvent.FsResult("delete", false, "trash rejected")
+            ?: return MirrorEvent.FsResult("delete", false, "trash rejected", req.reqId)
         val stamp = STAMP.format(Instant.ofEpochMilli(clock()).atZone(ZoneId.systemDefault()))
         var moved = 0
         for (rel in req.paths) {
             val abs = resolve(req.root, rel)
-                ?: return MirrorEvent.FsResult("delete", false, "path rejected")
+                ?: return MirrorEvent.FsResult("delete", false, "path rejected", req.reqId)
             // isDeclaredRootPath subsumes the abs == rootPath case (the requested root is
             // itself a declared root) as well as every nested root reachable from it.
             if (abs == trash || abs.startsWith("$trash/") || isDeclaredRootPath(abs)) {
-                return MirrorEvent.FsResult("delete", false, "path rejected")
+                return MirrorEvent.FsResult("delete", false, "path rejected", req.reqId)
             }
-            if (!bridge.mkdirs(trash)) return MirrorEvent.FsResult("delete", false, "could not open trash")
+            if (!bridge.mkdirs(trash)) {
+                return MirrorEvent.FsResult("delete", false, "could not open trash", req.reqId)
+            }
             val name = abs.substringAfterLast('/')
             var target = "$trash/$stamp-$name"
             var n = 1
@@ -159,31 +162,32 @@ class BrowseEngine(
                 // the earlier entries, and a bare ok=false would leave the peer unable to tell.
                 return MirrorEvent.FsResult(
                     "delete", false,
-                    "moved $moved of ${req.paths.size}; failed on $name",
+                    "moved $moved of ${req.paths.size}; failed on $name", req.reqId,
                 )
             }
             moved++
         }
         log("browse delete: $moved to trash")
-        return MirrorEvent.FsResult("delete", true, "$moved")
+        return MirrorEvent.FsResult("delete", true, "$moved", req.reqId)
     }
 
     /** Same-directory rename only. Changing directories is a move, and moves are not in v1. */
     private fun onRename(req: MirrorEvent.FsRename): MirrorEvent {
         val name = req.newName.trim()
+        fun refuse(detail: String) = MirrorEvent.FsResult("rename", false, detail, req.reqId)
         if (name.isEmpty() || name == "." || name == ".." || '/' in name || '\\' in name) {
-            return MirrorEvent.FsResult("rename", false, "invalid name")
+            return refuse("invalid name")
         }
-        val abs = resolve(req.root, req.path) ?: return MirrorEvent.FsResult("rename", false, "path rejected")
+        val abs = resolve(req.root, req.path) ?: return refuse("path rejected")
         // Refuses renaming any declared root's own directory, not just the requested one — the
         // same nesting hazard as onDelete above.
-        if (isDeclaredRootPath(abs)) return MirrorEvent.FsResult("rename", false, "path rejected")
+        if (isDeclaredRootPath(abs)) return refuse("path rejected")
         val target = "${abs.substringBeforeLast('/')}/$name"
-        if (confineAbsolute(target) == null) return MirrorEvent.FsResult("rename", false, "path rejected")
-        if (bridge.exists(target)) return MirrorEvent.FsResult("rename", false, "name already taken")
-        if (!bridge.move(abs, target)) return MirrorEvent.FsResult("rename", false, "rename failed")
+        if (confineAbsolute(target) == null) return refuse("path rejected")
+        if (bridge.exists(target)) return refuse("name already taken")
+        if (!bridge.move(abs, target)) return refuse("rename failed")
         log("browse rename: ${abs.substringAfterLast('/')} -> $name")
-        return MirrorEvent.FsResult("rename", true, name)
+        return MirrorEvent.FsResult("rename", true, name, req.reqId)
     }
 
     /**
@@ -207,9 +211,18 @@ class BrowseEngine(
 
     /** Confirms (and creates) a destination directory; the peer then sends with dest set. */
     private fun onPush(req: MirrorEvent.FsPush): MirrorEvent {
-        val abs = resolve(req.root, req.dir) ?: return MirrorEvent.FsResult("push", false, "path rejected")
-        if (!bridge.mkdirs(abs)) return MirrorEvent.FsResult("push", false, "could not create $abs")
-        return MirrorEvent.FsResult("push", true, abs)
+        val abs = resolve(req.root, req.dir)
+            ?: return MirrorEvent.FsResult("push", false, "path rejected", req.reqId)
+        if (!bridge.mkdirs(abs)) return MirrorEvent.FsResult("push", false, "could not create $abs", req.reqId)
+        return MirrorEvent.FsResult("push", true, abs, req.reqId)
+    }
+
+    /** The request id an FsResult must echo; "" for the ops whose callers don't correlate. */
+    private fun reqIdOf(event: MirrorEvent): String = when (event) {
+        is MirrorEvent.FsDelete -> event.reqId
+        is MirrorEvent.FsRename -> event.reqId
+        is MirrorEvent.FsPush -> event.reqId
+        else -> ""
     }
 
     /** The op label for an FsResult, or null when this event isn't a browse request at all. */

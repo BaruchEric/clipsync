@@ -136,13 +136,21 @@ object ClipClient {
                     .build()
             }
         }
-        val session = client.webSocketSession(
-            method = HttpMethod.Get,
-            host = host,
-            port = port,
-            path = "/sync",
-        ) {
-            url.protocol = URLProtocol.WSS
+        val session = try {
+            client.webSocketSession(
+                method = HttpMethod.Get,
+                host = host,
+                port = port,
+                path = "/sync",
+            ) {
+                url.protocol = URLProtocol.WSS
+            }
+        } catch (t: Throwable) {
+            // A failed dial (dead endpoint, fingerprint mismatch, timeout) must not leak this
+            // client's OkHttp dispatcher/connection pool: PeerDialer retries an offline peer
+            // forever, and one abandoned HttpClient per attempt accumulates until idle-timeout/GC.
+            client.close()
+            throw t
         }
         return PeerLink(session)
     }

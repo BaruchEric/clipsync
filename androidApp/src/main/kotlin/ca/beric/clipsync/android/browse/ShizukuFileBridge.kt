@@ -134,7 +134,8 @@ class ShizukuFileBridge(context: Context) : FileBridge {
     /**
      * "size\tdir\tmtime\tname" — the service's wire row. limit = 4 keeps a tab-containing
      * filename intact in the final field instead of splitting it into a fifth part, which
-     * would drop the entry from the listing while the file itself stayed on disk.
+     * would drop the entry from the listing while the file itself stayed on disk. The mtime
+     * field (parts[2]) still rides the row for service-version stability but has no consumer.
      */
     private fun parseRow(row: String): FsEntry? {
         val parts = row.split('\t', limit = 4)
@@ -145,7 +146,6 @@ class ShizukuFileBridge(context: Context) : FileBridge {
             name = name,
             size = parts[0].toLongOrNull() ?: 0L,
             dir = dir,
-            mtimeMs = parts[2].toLongOrNull() ?: 0L,
             mime = if (dir) "" else JvmFileBridge.guessMime(name),
         )
     }

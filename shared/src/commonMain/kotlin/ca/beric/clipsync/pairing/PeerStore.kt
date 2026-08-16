@@ -29,6 +29,12 @@ class PeerStore(private val db: ClipsyncDb) {
 
     private val queries get() = db.peerQueries
 
+    // PeerDialer calls all() on a 2 s tick forever, for a table that changes only on
+    // pair/unpair/endpoint-refresh — serve a memory snapshot and invalidate on the mutators
+    // rather than re-running the SQLite query ~43k times a day on a foreground service.
+    @kotlin.concurrent.Volatile
+    private var cached: List<Peer>? = null
+
     fun save(peer: Peer) {
         queries.upsert(
             peer.deviceId,
@@ -39,18 +45,24 @@ class PeerStore(private val db: ClipsyncDb) {
             peer.addresses.joinToString(","),
             peer.pairedAtMs,
         )
+        cached = null
     }
 
-    fun all(): List<Peer> = queries.selectAll(::toPeer).executeAsList()
+    fun all(): List<Peer> =
+        cached ?: queries.selectAll(::toPeer).executeAsList().also { cached = it }
 
     fun get(deviceId: String): Peer? = queries.getById(deviceId, ::toPeer).executeAsOneOrNull()
 
     /** Refresh a peer's address hints (e.g. a new tailnet IP seen at connect time). */
     fun updateAddresses(deviceId: String, addresses: List<String>) {
         queries.updateAddresses(addresses.joinToString(","), deviceId)
+        cached = null
     }
 
-    fun remove(deviceId: String) = queries.delete(deviceId)
+    fun remove(deviceId: String) {
+        queries.delete(deviceId)
+        cached = null
+    }
 
     @Suppress("LongParameterList")
     private fun toPeer(

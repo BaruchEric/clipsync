@@ -106,9 +106,9 @@ class ProtocolTest {
             MirrorEvent.SmsQueryThreads,
             MirrorEvent.SmsThreads(listOf(SmsThread(3L, "+15550001111", "hey", 1L, 9))),
             MirrorEvent.SmsQueryThread(3L),
-            MirrorEvent.SmsMessages(3L, listOf(SmsMessage("+15550001111", "hey", 1L, outbound = false))),
+            MirrorEvent.SmsMessages(3L, listOf(SmsMessage("hey", 1L, outbound = false))),
             MirrorEvent.SmsSend("+15550001111", "hello back"),
-            MirrorEvent.SmsSent(ok = true, to = "+15550001111"),
+            MirrorEvent.SmsSent(ok = true),
         )
         for (event in events) {
             assertEquals(event, MirrorCodec.decode(MirrorCodec.encode(event)), "round trip: $event")
@@ -127,17 +127,18 @@ class ProtocolTest {
             MirrorEvent.FsQueryRoots,
             MirrorEvent.FsRoots(listOf(FsRoot("dl", "Download"))),
             MirrorEvent.FsQueryList("dl", "sub/dir"),
-            MirrorEvent.FsEntries("dl", "sub/dir", listOf(FsEntry("a.txt", 12L, false, 99L, "text/plain"))),
+            MirrorEvent.FsEntries("dl", "sub/dir", listOf(FsEntry("a.txt", 12L, false, "text/plain"))),
             MirrorEvent.FsEntries("dl", "big", emptyList(), truncated = true),
             MirrorEvent.MediaQuery(0, 60),
-            MirrorEvent.MediaItems(listOf(MediaItem(7L, "IMG.jpg", 900L, 5L, "image/jpeg", 4000, 3000))),
+            MirrorEvent.MediaItems(listOf(MediaItem(7L, "IMG.jpg", 900L, 5L, "image/jpeg"))),
             MirrorEvent.ThumbQuery(listOf(7L, 8L)),
             MirrorEvent.Thumbs(mapOf(7L to "QUJD")),
             MirrorEvent.FsPull("dl", "a.txt"),
-            MirrorEvent.FsPush("dl", "sub"),
-            MirrorEvent.FsDelete("dl", listOf("a.txt", "b.txt")),
-            MirrorEvent.FsRename("dl", "a.txt", "b.txt"),
+            MirrorEvent.FsPush("dl", "sub", reqId = "r1"),
+            MirrorEvent.FsDelete("dl", listOf("a.txt", "b.txt"), reqId = "r2"),
+            MirrorEvent.FsRename("dl", "a.txt", "b.txt", reqId = "r3"),
             MirrorEvent.FsResult("pull", false, "not found"),
+            MirrorEvent.FsResult("delete", true, "2", reqId = "r2"),
         )
         for (event in events) {
             assertEquals(event, MirrorCodec.decode(MirrorCodec.encode(event)), "round trip failed for $event")
